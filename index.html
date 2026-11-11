@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Hike — cute pixel route videos</title>
+  </head>
+  <body>
+    <header class="top">
+      <h1>PIXEL<span>HIKE</span></h1>
+      <p>Turn a GPX workout into a cute pixel-art route video.</p>
+    </header>
+
+    <main class="layout">
+      <aside class="panel" id="controls">
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept=".gpx,application/gpx+xml" hidden />
+          <strong>Drop a GPX file</strong>
+          <small>Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em></small>
+        </label>
+
+        <div class="field">
+          <span>Title</span>
+          <input id="title" type="text" maxlength="24" placeholder="My hike" />
+        </div>
+
+        <div class="field">
+          <span>View</span>
+          <div class="seg" id="mode">
+            <button data-v="3d" class="on">3D</button>
+            <button data-v="2d">2D map</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Format</span>
+          <div class="seg" id="aspect">
+            <button data-v="landscape" class="on">16:9</button>
+            <button data-v="portrait">9:16 story</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Length <b id="durLabel">45s</b></span>
+          <input id="duration" type="range" min="20" max="120" step="1" value="45" />
+        </div>
+
+        <div class="field row">
+          <label class="check"><input id="minimap" type="checkbox" checked /> Minimap</label>
+          <select id="tz" title="Time zone for the clock"></select>
+        </div>
+
+        <div class="field">
+          <span>Checkpoints</span>
+          <ul id="cps" class="cps"><li class="muted">Load a track first.</li></ul>
+        </div>
+
+        <div class="field">
+          <span>Export</span>
+          <div class="row">
+            <select id="quality">
+              <option value="4">720p</option>
+              <option value="6" selected>1080p</option>
+            </select>
+            <button id="export" class="primary" disabled>Export MP4</button>
+          </div>
+          <progress id="progress" max="1" value="0" hidden></progress>
+          <a id="download" hidden>Download video</a>
+        </div>
+      </aside>
+
+      <section class="stage">
+        <div class="screen" id="screen">
+          <canvas id="view"></canvas>
+          <div class="status" id="status">Drop a GPX file to begin</div>
+        </div>
+        <div class="transport">
+          <button id="play" disabled>&#9208;</button>
+          <input id="scrub" type="range" min="0" max="1000" value="0" disabled />
+          <span id="clock">0.0s</span>
+        </div>
+        <div class="stats" id="stats"></div>
+      </section>
+    </main>
+
+    <footer>
+      Elevation: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noreferrer">AWS Terrain Tiles</a>
+      (Mapzen; SRTM &amp; others). Your GPX never leaves your browser.
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
