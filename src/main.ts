@@ -44,6 +44,7 @@ const ui = {
   zoneTech: $<HTMLInputElement>('zoneTech'),
   zoneLabels: $<HTMLInputElement>('zoneLabels'),
   zoneSummary: $('zoneSummary'),
+  zoneState: $('zoneState'),
   zoneReset: $<HTMLButtonElement>('zoneReset'),
   activity: $('activity'),
   character: $('character'),
@@ -244,6 +245,7 @@ function rebuild() {
   const gate = gateOptions();
   state.zones = buildZones(state.track, zoneSettings());
   ui.zoneRows.classList.toggle('off', !ui.zonesOn.checked);
+  ui.zoneState.textContent = ui.zonesOn.checked ? 'on' : 'off';
   renderZoneSummary();
   state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate });
   renderer.setData({
@@ -366,7 +368,7 @@ function collectSettings() {
     gateColor: ui.gateColor.value,
     gateText: ui.gateText.value,
     gateTagline: ui.gateTagline.value,
-    zonesOn: ui.zonesOn.checked,
+    zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
     zoneStyle2: ui.zoneStyle[2].value,
@@ -397,7 +399,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateColor === 'string') ui.gateColor.value = s.gateColor;
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
-  for (const [k, el] of [['zonesOn', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
+  for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   ui.zoneStyle.forEach((el, i) => {
@@ -742,7 +744,7 @@ ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
 for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
 ui.zoneReset.onclick = () => {
   if (!state.track) return;
-  setZoneUi(defaultZones(state.track));
+  setZoneUi({ ...defaultZones(state.track), on: ui.zonesOn.checked }); // reset heights/styles, keep on/off
   rebuild();
 };
 

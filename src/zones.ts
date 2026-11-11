@@ -45,7 +45,7 @@ export function defaultZones(track: Track): ZoneSettings {
   const r = Math.max(1, maxEle - minEle);
   const round = (v: number) => Math.round(v / 50) * 50;
   return {
-    on: true,
+    on: false, // optional for now: the user switches it on
     technical: true,
     labels: true,
     bands: tropical

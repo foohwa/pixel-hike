@@ -72,9 +72,9 @@
           <input id="gateTagline" type="text" maxlength="28" placeholder="Tagline, e.g. CAN YOU SURVIVE?" />
         </div>
 
-        <div class="field">
-          <span>Trail zones</span>
-          <label class="check"><input type="checkbox" id="zonesOn" checked /> Decorate the trail by elevation</label>
+        <details class="field fold" id="zonesFold">
+          <summary>Trail zones <i id="zoneState">off</i></summary>
+          <label class="check"><input type="checkbox" id="zonesOn" /> Decorate the trail by elevation <i class="hint">(experimental)</i></label>
           <div class="zones" id="zoneRows">
             <div class="zrow"><em>Low</em><span class="from">from the bottom</span><select id="zoneStyle0"></select></div>
             <div class="zrow"><em>Mid</em><label class="from">from <input type="number" id="zoneAt1" step="50" min="0" max="9000" /> m</label><select id="zoneStyle1"></select></div>
@@ -88,7 +88,7 @@
             <small id="zoneSummary" class="hint"></small>
             <button id="zoneReset" class="mini" title="Back to the suggested heights for this track">Reset</button>
           </div>
-        </div>
+        </details>
 
         <div class="field">
           <span>Character</span>

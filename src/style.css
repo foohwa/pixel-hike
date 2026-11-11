@@ -141,3 +141,13 @@ footer a { color: var(--sky); }
 .zrow select { padding: 3px 4px; font-size: 11px; }
 .zones.off { opacity: 0.45; pointer-events: none; }
 .hint { color: var(--grey); font-size: 10px; line-height: 1.4; }
+
+details.fold > summary {
+  cursor: pointer; list-style: none; color: var(--grey); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: '▸ '; color: var(--yellow); }
+details.fold[open] > summary::before { content: '▾ '; }
+details.fold > summary i { font-style: normal; text-transform: none; letter-spacing: 0; opacity: 0.6; }
+details.fold[open] { display: flex; }
+details.fold:not([open]) { display: block; }
