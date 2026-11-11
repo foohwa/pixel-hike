@@ -766,7 +766,7 @@ function renderStats() {
   const items: [string, string][] = [
     ['Distance', `${((s.distance * tr.distScale) / 1000).toFixed(2)} km`],
     ['Duration', `${h}h ${String(m).padStart(2, '0')}m`],
-    ['Ascent', `${Math.round(s.ascent).toLocaleString()} m`],
+    ['Elevation gain', `${Math.round(s.ascent).toLocaleString()} m`],
     ['Highest', `${Math.round(s.maxEle).toLocaleString()} m`],
   ];
   if (s.avgHr) items.push(['Avg HR', `${Math.round(s.avgHr)} bpm`]);

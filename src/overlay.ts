@@ -585,14 +585,14 @@ function drawOutroCard(o: OverlayInput) {
     rows.push(['TIME', elapsedText(s.duration)]);
     rows.push(['AVG PACE', `${paceText(s.duration / 1000 / km)}/KM`]);
   } else rows.push(['TIME', elapsedText(s.duration, false)]);
-  rows.push(['ASCENT', `${fmtInt(s.ascent)} M`]);
+  rows.push(['ELEV GAIN', `${fmtInt(s.ascent)} M`]);
   if (!run) rows.push(['HIGHEST', `${fmtInt(s.maxEle)} M`]);
   const camps = o.checkpoints.filter((c) => c.enabled && c.kind === 'camp').length;
   if (o.activity === 'camphike' && camps) rows.push(['NIGHTS', String(camps)]);
   if (s.avgHr) rows.push(['AVG HR', `${Math.round(s.avgHr)} BPM`]);
   if (s.calories && rows.length < 7) rows.push(['CALORIES', `${fmtInt(s.calories)}`]);
   const header = run ? 'FINISHER!' : o.activity === 'camphike' ? 'TRIP COMPLETE!' : 'HIKE COMPLETE!';
-  const labelW = 9 * 6;
+  const labelW = 10 * 6; // longest label (ELEV GAIN) + a gap
   const valW = Math.max(...rows.map((r) => textWidth(r[1])));
   const bw = Math.max(textWidth(header), labelW + valW) + 16;
   const bh = 16 + rows.length * 10 + 4;
