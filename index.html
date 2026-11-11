@@ -15,14 +15,48 @@
     <main class="layout">
       <aside class="panel" id="controls">
         <label class="drop" id="drop">
-          <input type="file" id="file" accept=".gpx,application/gpx+xml" hidden />
-          <strong>Drop a GPX file</strong>
-          <small>Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em></small>
+          <input type="file" id="file" accept=".gpx,.fit,application/gpx+xml" hidden />
+          <strong>Drop a GPX or FIT file</strong>
+          <small>Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em> or <em>Export as FIT file</em></small>
         </label>
 
         <div class="field">
           <span>Title</span>
           <input id="title" type="text" maxlength="24" placeholder="My hike" />
+        </div>
+
+        <div class="field">
+          <span>Activity</span>
+          <div class="seg" id="activity">
+            <button data-v="hike" class="on">Hike</button>
+            <button data-v="camphike">Camp hike</button>
+            <button data-v="trailrun">Trail run</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Character</span>
+          <div class="seg" id="character">
+            <button data-v="hiker" class="on">Hiker</button>
+            <button data-v="runner">Runner</button>
+            <button data-v="dog">Dog</button>
+            <button data-v="cat">Cat</button>
+          </div>
+          <div class="row">
+            <label class="check">Buddy
+              <select id="companion">
+                <option value="">none</option>
+                <option value="dog">dog</option>
+                <option value="cat">cat</option>
+              </select>
+            </label>
+            <canvas id="charPreview" width="64" height="16" title="Walk cycle preview"></canvas>
+          </div>
+          <div class="row small">
+            <label class="link">Use my sprite sheet&hellip;<input type="file" id="sheet" accept="image/png" hidden /></label>
+            <button id="template" class="mini" title="64×128 sheet in the Pixel Hike standard (8× upscaled)">Template PNG</button>
+            <button id="resetSheet" class="mini" hidden>Reset</button>
+          </div>
         </div>
 
         <div class="field">
@@ -42,8 +76,8 @@
         </div>
 
         <div class="field">
-          <span>Length <b id="durLabel">45s</b></span>
-          <input id="duration" type="range" min="20" max="120" step="1" value="45" />
+          <span>Length <b id="durLabel">45s</b> <i id="speedLabel"></i></span>
+          <input id="duration" type="range" min="20" max="180" step="1" value="45" />
         </div>
 
         <div class="field row">
@@ -54,6 +88,7 @@
         <div class="field">
           <span>Checkpoints</span>
           <ul id="cps" class="cps"><li class="muted">Load a track first.</li></ul>
+          <button id="addCp" class="mini" disabled>+ Add checkpoint at current position</button>
         </div>
 
         <div class="field">

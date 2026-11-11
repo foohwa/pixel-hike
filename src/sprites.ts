@@ -1,79 +1,6 @@
 import { C } from './palette';
 
-/**
- * Hand-made pixel sprites. Each char is one pixel; '.' is transparent.
- * These are placeholders you can later swap for Grok Imagine art cleaned with unfake.js
- * (anything that produces a small PNG on the same palette works).
- */
-export const AVATAR_KEYS: Record<string, string> = {
-  k: C.ink, // outline
-  h: C.coral, // hat
-  H: C.wine, // hat band
-  l: C.cream, // head lamp
-  s: C.skin,
-  c: C.pink, // blush
-  t: C.yellow, // shirt
-  T: C.orange, // shirt shade
-  b: C.tealDeep, // pack straps
-  B: C.moss, // backpack
-  p: C.dusk, // pants
-  o: C.brownDark, // boots
-  w: C.brown, // trekking pole
-};
-
-const HEAD = [
-  '.....kkkkkk.....',
-  '....khhhhhhk....',
-  '...khhhhlhhhk...',
-  '...kHHHHHHHHk...',
-  '.kkkkkkkkkkkkkk.',
-  '..kssssssssssk..',
-  '..kssksssskssk..',
-  '..kcssskksssck..',
-  '...kkkkkkkkkk...',
-];
-
-const BODY = [
-  '..Bktbttttbtk.w.',
-  '.BBstbttttbtssw.',
-  '.BBkTTTTTTTTk.w.',
-  '...kppppppppk.w.',
-];
-
-export const HIKER_FRAMES: Record<string, string[]> = {
-  stand: ['................', ...HEAD, ...BODY, '....kpk..kpk..w.', '....kook.kook.w.'],
-  walk1: ['................', ...HEAD, ...BODY, '....kpk..kook.w.', '...kook.......w.'],
-  walk2: ['................', ...HEAD, ...BODY, '...kook..kpk..w.', '.........kook.w.'],
-  cheer: [
-    '................',
-    '.....kkkkkk.....',
-    '....khhhhhhk....',
-    '...khhhhlhhhk...',
-    '...kHHHHHHHHk...',
-    '.kkkkkkkkkkkkkk.',
-    's.kssssssssssk.s',
-    'k.kssksssskssk.k',
-    'k.kcssskksssck.k',
-    '.k.kkkkkkkkkk.k.',
-    '..kktbttttbtkk..',
-    '..Bktbttttbtk...',
-    '..BkTTTTTTTTk...',
-    '...kppppppppk...',
-    '...kpk....kpk...',
-    '..kook....kook..',
-  ],
-  sit: [
-    '................',
-    '................',
-    '................',
-    ...HEAD,
-    '..Bstbttttbts...',
-    '..BkTTTTTTTTk...',
-    '..kppppppppppk..',
-    '..kook....kook..',
-  ],
-};
-
+/** Hand-made pixel props and HUD icons. Each char is one pixel; '.' is transparent. Characters live in characters.ts. */
 export const TENT = [
   '....k....',
   '...kak...',
@@ -83,6 +10,39 @@ export const TENT = [
   'kaaAkAaak',
   'kkkkkkkkk',
 ];
+
+export const CAMPFIRE = [
+  [
+    '...y....',
+    '..yoy...',
+    '..yooy..',
+    '.yorroy.',
+    '.korrok.',
+    'kLkLLkLk',
+  ],
+  [
+    '....y...',
+    '...yoy..',
+    '..yooy..',
+    '.yorrry.',
+    '.korrok.',
+    'kLkLLkLk',
+  ],
+];
+
+/** Aid-station canopy for race checkpoints. */
+export const AID = [
+  'kkkkkkkkkkk',
+  'kSWSWSWSWSk',
+  'kkkkkkkkkkk',
+  '.k.......k.',
+  '.k.kkkkk.k.',
+  '.k.kWWWk.k.',
+  '.k.k...k.k.',
+];
+
+export const STOPWATCH = ['..kk...', '.kkkk..', 'kwwwwk.', 'kwwkwk.', 'kwkkwk.', 'kwwwwk.', '.kkkk..'];
+export const THERMO = ['.kk.', 'kwwk', 'kwwk', 'krrk', 'krrk', 'krrk', '.kk.'];
 
 export const HEART = ['.kk.kk.', 'kRrkrrk', 'krrrrrk', '.krrrk.', '..krk..', '...k...'];
 export const SUN = ['...y...', '.y...y.', '..ooo..', 'y.ooo.y', '..ooo..', '.y...y.', '...y...'];
@@ -101,6 +61,9 @@ const ICON_KEYS: Record<string, string> = {
   g: C.green,
   a: C.orange,
   A: C.wine,
+  S: C.sky,
+  W: C.white,
+  L: C.brown,
 };
 
 const cache = new Map<string, HTMLCanvasElement>();
@@ -181,6 +144,21 @@ export function drawFlag(
     for (let cy = 0; cy < len; cy++) {
       ctx.fillStyle = checkered ? (((cx >> 1) + ((cy + (ch - len) / 2) >> 1)) % 2 ? C.ink : C.white) : color;
       ctx.fillRect(X + 1 + cx, y0 + cy, 1, 1);
+    }
+  }
+}
+
+/** Moon disc of radius r with the real phase (0 new … 0.5 full … 1 new), lit side per hemisphere. */
+export function drawMoon(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, phase: number, dark: string) {
+  const k = Math.cos(2 * Math.PI * phase);
+  for (let y = -r; y <= r; y++) {
+    for (let x = -r; x <= r; x++) {
+      if (x * x + y * y > r * r + r * 0.6) continue;
+      const half = Math.sqrt(Math.max(1e-6, r * r - y * y));
+      const xn = x / half;
+      const lit = phase <= 0.5 ? xn >= k : xn <= -k;
+      ctx.fillStyle = lit ? C.cream : dark;
+      ctx.fillRect(Math.round(cx + x), Math.round(cy + y), 1, 1);
     }
   }
 }

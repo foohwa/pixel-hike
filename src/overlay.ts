@@ -1,37 +1,57 @@
+import { frameOf, type Anim, type SpriteSet } from './characters';
 import { drawText, textWidth } from './font';
-import { C } from './palette';
+import { C, PALETTE, rgb01 } from './palette';
 import type { SkyState } from './sky';
-import { drawFlag, drawSprite, HEART, HIKER_FRAMES, AVATAR_KEYS, MOON, MOUNTAIN, SUN, TENT } from './sprites';
+import { AID, CAMPFIRE, drawFlag, drawMoon, drawSprite, HEART, MOON, MOUNTAIN, STOPWATCH, SUN, TENT, THERMO } from './sprites';
 import type { Timeline, TimelineState } from './timeline';
-import { clamp, sampleAt, type Checkpoint, type Track } from './track';
+import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
+
+export interface DialState {
+  isDay: boolean;
+  frac: number; // 0..1 across the current day (sunrise→sunset) or night (sunset→sunrise)
+  moonPhase: number;
+}
 
 export interface OverlayInput {
   ctx: CanvasRenderingContext2D;
   W: number;
   H: number;
   track: Track;
+  activity: Activity;
   checkpoints: Checkpoint[];
   timeline: Timeline;
   state: TimelineState;
   sky: SkyState;
+  dial: DialState;
+  toasts: { text: string; t: number }[];
   title: string;
   tzOffsetMin: number;
-  hiker: ScreenPoint;
+  hero: SpriteSet;
+  heroAt: ScreenPoint;
   facingLeft: boolean;
+  pet: SpriteSet | null;
+  petAt: ScreenPoint | null;
+  petFacingLeft: boolean;
   /** Screen position of each enabled checkpoint. */
   cpScreen: Map<string, ScreenPoint>;
   showMinimap: boolean;
 }
 
-const FLAG_COLOR: Record<Checkpoint['kind'], string> = {
+export const KIND_COLOR: Record<Checkpoint['kind'], string> = {
   start: C.greenLight,
   summit: C.red,
   peak: C.yellow,
+  view: C.pink,
   rest: C.orange,
+  camp: C.coral,
+  cp: C.skyLight,
   finish: C.white,
 };
+
+const REST_SIGN = ['kkkkkkk', 'kmLmLmk', 'kLmLmLk', 'kkkkkkk', '..kLk..', '..kLk..', '..kLk..'];
+const SIGN_KEYS = { k: C.ink, m: C.cream, L: C.brown };
 
 export function drawOverlay(o: OverlayInput) {
   const { ctx, W, H } = o;
@@ -40,9 +60,36 @@ export function drawOverlay(o: OverlayInput) {
 
   drawWorldSprites(o);
   drawHud(o);
+  drawToasts(o);
   drawBanner(o);
   drawTitleCard(o);
   drawOutroCard(o);
+}
+
+// ---------------------------------------------------------------- animation choice
+
+/** Picks the animation for the current moment (shared by the hero and the companion). */
+export function pickAnim(o: Pick<OverlayInput, 'state' | 'track' | 'activity' | 'sky'>): Anim {
+  const { state, track } = o;
+  if (state.phase === 'intro') return 'idle';
+  if (state.phase === 'outro') return 'cheer';
+  if (state.phase === 'pause' && state.pauseCp) {
+    switch (state.pauseCp.kind) {
+      case 'rest':
+      case 'cp':
+        return 'rest';
+      case 'camp':
+        return o.sky.isNight ? 'sleep' : 'rest';
+      case 'view':
+        return 'idle';
+      default:
+        return 'cheer';
+    }
+  }
+  const g = sampleAt(track, track.grade, state.d);
+  if (g > 0.15) return 'climb';
+  if (g < -0.15) return o.activity === 'trailrun' ? 'run' : 'descend';
+  return o.activity === 'trailrun' ? 'run' : 'walk';
 }
 
 // ---------------------------------------------------------------- world sprites
@@ -51,53 +98,60 @@ function drawWorldSprites(o: OverlayInput) {
   const { ctx, state, timeline } = o;
   const t = state.t;
 
-  // flags behind the hiker
   for (const cp of o.checkpoints) {
     if (!cp.enabled) continue;
     const p = o.cpScreen.get(cp.id);
     if (!p || !p.visible) continue;
     const reachT = timeline.reachTimes.get(cp.id);
-    const reached = reachT != null && t >= reachT && state.phase !== 'intro' ? true : cp.kind === 'start';
-    if (cp.kind === 'rest') {
-      drawSprite(ctx, TENT, p.x, p.y);
-      continue;
+    const reached = cp.kind === 'start' || (reachT != null && t >= reachT && state.phase !== 'intro');
+    switch (cp.kind) {
+      // props sit just beside the trail so the characters don't cover them
+      case 'camp':
+        drawSprite(ctx, TENT, p.x + 3, p.y - 7);
+        drawSprite(ctx, CAMPFIRE[Math.floor(t * 6) % 2], p.x + 13, p.y + 1);
+        break;
+      case 'rest':
+        drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
+        break;
+      case 'cp':
+        drawSprite(ctx, AID, p.x + 15, p.y);
+        break;
+      default: {
+        const raise = cp.kind === 'start' ? 1 : reached ? clamp((t - (reachT ?? 0)) / 0.5, 0, 1) : 0;
+        drawFlag(ctx, p.x, p.y, reached ? KIND_COLOR[cp.kind] : C.rock, raise, t * 7, cp.kind === 'finish' && reached);
+      }
     }
-    const raise = reached ? clamp((t - (reachT ?? 0)) / 0.5, 0, 1) : 0;
-    drawFlag(ctx, p.x, p.y, reached ? FLAG_COLOR[cp.kind] : C.rock, cp.kind === 'start' ? 1 : raise, t * 7, cp.kind === 'finish' && reached);
   }
 
-  // hiker
-  const h = o.hiker;
+  const anim = pickAnim(o);
+
+  // companion trots a little behind
+  if (o.pet && o.petAt?.visible) {
+    const p = o.petAt;
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(p.x - 4, p.y - 1, 9, 2);
+    ctx.drawImage(frameOf(o.pet, anim, t + 0.13, o.petFacingLeft), p.x - 8, p.y - 16);
+  }
+
+  const h = o.heroAt;
   if (!h.visible) return;
-  let frame: string[];
-  let jump = 0;
-  const pauseKind = state.pauseCp?.kind;
-  if (state.phase === 'pause' && pauseKind === 'rest') frame = HIKER_FRAMES.sit;
-  else if (state.phase === 'pause' || state.phase === 'outro') {
-    const beat = Math.floor(t * 5) % 2 === 0;
-    frame = beat ? HIKER_FRAMES.cheer : HIKER_FRAMES.stand;
-    jump = beat ? 2 : 0;
-  } else if (state.phase === 'intro') frame = HIKER_FRAMES.stand;
-  else frame = [HIKER_FRAMES.walk1, HIKER_FRAMES.stand, HIKER_FRAMES.walk2, HIKER_FRAMES.stand][Math.floor(t * 8) % 4];
-
-  // shadow
   ctx.fillStyle = C.ink;
-  ctx.fillRect(Math.round(h.x) - 4, Math.round(h.y) - 1, 9, 2);
-  drawSprite(ctx, frame, h.x, h.y - jump, { keys: AVATAR_KEYS, flip: o.facingLeft });
+  ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
+  ctx.drawImage(frameOf(o.hero, anim, t, o.facingLeft), h.x - 8, h.y - 16);
 
-  // headlamp sparkle at night
-  if (o.sky.lamp > 0.5 && state.phase !== 'outro') {
+  // head-lamp sparkle at night
+  if (o.hero.lamp && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
+    const lx = o.facingLeft ? 15 - o.hero.lamp[0] : o.hero.lamp[0];
     ctx.fillStyle = Math.floor(t * 4) % 2 ? C.cream : C.yellow;
-    ctx.fillRect(Math.round(h.x) + (o.facingLeft ? -1 : 0), Math.round(h.y) - 14 - jump, 1, 1);
+    ctx.fillRect(h.x - 8 + lx, h.y - 16 + o.hero.lamp[1], 1, 1);
   }
 
-  // zZz while resting
-  if (state.phase === 'pause' && pauseKind === 'rest') {
-    const u = state.pauseU;
+  // zZz while sleeping at camp
+  if (anim === 'sleep') {
     for (let k = 0; k < 2; k++) {
-      const uu = (u * 1.5 + k / 2) % 1;
+      const uu = (t * 0.6 + k / 2) % 1;
       if (uu > 0.85) continue;
-      drawText(ctx, 'Z', h.x + 6 + uu * 8, h.y - 16 - uu * 16, C.white, { shadow: C.ink });
+      drawText(ctx, 'Z', h.x + 4 + uu * 8, h.y - 14 - uu * 16, C.white, { shadow: C.ink });
     }
   }
 
@@ -137,9 +191,20 @@ function fmtInt(v: number) {
   return Math.round(v).toLocaleString('en-US');
 }
 
-function clockText(ms: number, tzOffsetMin: number) {
+export function clockText(ms: number, tzOffsetMin: number) {
   const d = new Date(ms + tzOffsetMin * 60000);
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function elapsedText(ms: number, seconds = true) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  return seconds ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${h}H ${String(m).padStart(2, '0')}M`;
+}
+
+function paceText(secPerKm: number) {
+  if (!Number.isFinite(secPerKm) || secPerKm <= 0 || secPerKm > 3600) return '--:--';
+  return `${Math.floor(secPerKm / 60)}:${String(Math.round(secPerKm % 60)).padStart(2, '0')}`;
 }
 
 function drawHud(o: OverlayInput) {
@@ -147,35 +212,124 @@ function drawHud(o: OverlayInput) {
   if (state.phase === 'intro' && state.t < o.timeline.intro - 0.5) return;
   const d = state.d;
   const ele = sampleAt(track, track.ele, d);
-  const time = sampleAt(track, track.time, d);
   const hr = sampleAt(track, track.hr, d);
+  const temp = sampleAt(track, track.temp, d);
+  const run = o.activity === 'trailrun';
 
-  // top-left: distance + elevation
-  const distStr = `${(d / 1000).toFixed(1)} KM`;
-  const eleStr = `${fmtInt(ele)} M`;
-  const lw = Math.max(textWidth(distStr), textWidth(eleStr) + 10) + 8;
-  panel(ctx, 4, 4, lw, 22);
-  drawText(ctx, distStr, 8, 7, C.yellow);
-  drawSprite(ctx, MOUNTAIN, 8, 16, { anchor: 'topleft' });
-  drawText(ctx, eleStr, 18, 16, C.white);
+  // top-left: distance, elevation (+ pace for runs)
+  const lines: [string[] | null, string, string][] = [
+    [null, `${((d * track.distScale) / 1000).toFixed(1)} KM`, C.yellow],
+    [MOUNTAIN, `${fmtInt(ele)} M`, C.white],
+  ];
+  if (run) {
+    const pace = sampleAt(track, track.pace, d) / track.distScale;
+    lines.push([null, `${paceText(pace)}/KM`, C.skyLight]);
+  }
+  const lw = Math.max(...lines.map(([icon, s]) => textWidth(s) + (icon ? 10 : 0))) + 8;
+  panel(ctx, 4, 4, lw, 4 + lines.length * 9);
+  lines.forEach(([icon, s, col], i) => {
+    const y = 7 + i * 9;
+    if (icon) drawSprite(ctx, icon, 8, y + (icon.length < 7 ? 1 : 0), { anchor: 'topleft' });
+    drawText(ctx, s, icon ? 18 : 8, y, col);
+  });
 
-  // top-right: clock + heart rate
-  const clock = clockText(time, o.tzOffsetMin);
-  const hrStr = Number.isFinite(hr) ? String(Math.round(hr)) : '';
-  const rw = Math.max(textWidth(clock), textWidth(hrStr)) + 20;
-  const rh = hrStr ? 22 : 13;
-  panel(ctx, W - 4 - rw, 4, rw, rh);
-  drawSprite(ctx, sky.isNight ? MOON : SUN, W - rw + 1, 7, { anchor: 'topleft' });
-  drawText(ctx, clock, W - 8, 7, C.white, { align: 'right' });
-  if (hrStr) {
+  // top-right: clock (or race timer), heart rate, temperature
+  const right: [string[], string, string][] = [];
+  if (run) right.push([STOPWATCH, elapsedText(state.clockMs - track.stats.startTime), C.white]);
+  else right.push([sky.isNight ? MOON : SUN, clockText(state.clockMs, o.tzOffsetMin), C.white]);
+  if (Number.isFinite(hr)) {
     const beat = (state.t * hr) / 60;
     const big = beat - Math.floor(beat) < 0.22;
-    drawSprite(ctx, HEART, W - rw + 1 + (big ? 0 : 0), 16 + (big ? 0 : 1), { anchor: 'topleft' });
-    drawText(ctx, hrStr, W - 8, 16, big ? C.pink : C.white, { align: 'right' });
+    right.push([HEART, String(Math.round(hr)), big ? C.pink : C.white]);
   }
+  if (Number.isFinite(temp)) right.push([THERMO, `${Math.round(temp)}°C`, C.white]);
+  const rw = Math.max(...right.map(([, s]) => textWidth(s))) + 20;
+  const rh = 4 + right.length * 9;
+  panel(ctx, W - 4 - rw, 4, rw, rh);
+  right.forEach(([icon, s, col], i) => {
+    const y = 7 + i * 9;
+    drawSprite(ctx, icon, W - rw + 1 + Math.floor((7 - icon[0].length) / 2), y, { anchor: 'topleft' });
+    drawText(ctx, s, W - 8, y, col, { align: 'right' });
+  });
 
+  drawDial(o);
   if (o.showMinimap) drawMinimap(o, W - 4 - 42, 4 + rh + 3, 42);
   drawProfile(o);
+}
+
+const palRgb = PALETTE.map((h) => [h, ...rgb01(h)] as [string, number, number, number]);
+function nearestHex(c: [number, number, number]) {
+  let best = palRgb[0][0], bd = Infinity;
+  for (const [h, r, g, b] of palRgb) {
+    const d = (r - c[0]) ** 2 * 0.22 + (g - c[1]) ** 2 * 0.45 + (b - c[2]) ** 2 * 0.33;
+    if (d < bd) { bd = d; best = h; }
+  }
+  return best;
+}
+
+/** Little window at the top showing the sun or moon travelling over the horizon. */
+function drawDial(o: OverlayInput) {
+  const { ctx, W, sky, dial } = o;
+  const w = 38, h = 22;
+  let x = Math.round(W / 2 - w / 2);
+  let y = 4;
+  if (W < 200) {
+    // portrait: tuck it under the left panel so nothing overlaps
+    x = 4;
+    y = 4 + 4 + 2 * 9 + 3 + (o.activity === 'trailrun' ? 9 : 0);
+  }
+  panel(ctx, x, y, w, h);
+  const ix = x + 1, iy = y + 1, iw = w - 2, ih = h - 2;
+  const groundH = 4;
+  const skyH = ih - groundH;
+  for (let r = 0; r < skyH; r++) {
+    const f = r / Math.max(1, skyH - 1);
+    const c: [number, number, number] = [
+      sky.top[0] + (sky.bottom[0] - sky.top[0]) * f,
+      sky.top[1] + (sky.bottom[1] - sky.top[1]) * f,
+      sky.top[2] + (sky.bottom[2] - sky.top[2]) * f,
+    ];
+    ctx.fillStyle = nearestHex(c);
+    ctx.fillRect(ix, iy + r, iw, 1);
+  }
+  if (sky.stars > 0.3) {
+    ctx.fillStyle = C.white;
+    for (const [sx, sy] of [[3, 2], [9, 5], [16, 1], [24, 4], [30, 2], [33, 7], [6, 9]]) ctx.fillRect(ix + sx, iy + sy, 1, 1);
+  }
+  const gy = iy + skyH;
+  ctx.fillStyle = C.green;
+  ctx.fillRect(ix, gy, iw, 1);
+  ctx.fillStyle = C.forest;
+  ctx.fillRect(ix, gy + 1, iw, groundH - 1);
+  ctx.fillStyle = C.forestDeep;
+  for (let k = 0; k < 5; k++) ctx.fillRect(ix + 4 + k, gy - Math.min(k, 4 - k), 1, 1 + Math.min(k, 4 - k));
+
+  const cx = ix + iw / 2;
+  const rx = iw / 2 - 5, ry = skyH - 4;
+  const ang = Math.PI * (1 - clamp(dial.frac, 0, 1));
+  const px = Math.round(cx + Math.cos(ang) * rx);
+  const py = Math.round(gy - 1 - Math.sin(ang) * ry);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ix, iy, iw, skyH);
+  ctx.clip();
+  if (dial.isDay) drawSprite(ctx, SUN, px, py, { anchor: 'center' });
+  else drawMoon(ctx, px, py, 3, dial.moonPhase, C.night);
+  ctx.restore();
+}
+
+function drawToasts(o: OverlayInput) {
+  const { ctx, W, H, state } = o;
+  for (const toast of o.toasts) {
+    const age = state.t - toast.t;
+    if (age < 0 || age > 2.2) continue;
+    const w = textWidth(toast.text) + 10;
+    const slide = Math.min(1, age * 5);
+    const y0 = W < H ? H - 4 - 18 - 18 : 30;
+    const y = Math.round(y0 + (1 - slide) * (W < H ? 8 : -8));
+    panel(ctx, Math.round(W / 2 - w / 2), y, w, 12, C.cream, C.ink);
+    drawText(ctx, toast.text, W / 2, y + 3, C.plum, { align: 'center' });
+  }
 }
 
 const profileCache = new WeakMap<Track, { w: number; cols: Float32Array }>();
@@ -193,11 +347,13 @@ function drawProfile(o: OverlayInput) {
     cache = { w: iw, cols };
     profileCache.set(track, cache);
   }
+  const cols = cache.cols;
   const { minEle, maxEle, distance } = track.stats;
   const range = Math.max(1, maxEle - minEle);
   const cur = Math.round((state.d / distance) * (iw - 1));
+  const hAt = (c: number) => 1 + Math.round(((cols[clamp(c, 0, iw - 1)] - minEle) / range) * (ph - 3));
   for (let c = 0; c < iw; c++) {
-    const hgt = 1 + Math.round(((cache.cols[c] - minEle) / range) * (ph - 3));
+    const hgt = hAt(c);
     const x = x0 + 2 + c;
     const yb = y0 + 1 + ph;
     ctx.fillStyle = c <= cur ? C.green : C.rockDark;
@@ -205,20 +361,15 @@ function drawProfile(o: OverlayInput) {
     ctx.fillStyle = c <= cur ? C.lime : C.rock;
     ctx.fillRect(x, yb - hgt, 1, 1);
   }
-  // checkpoint ticks
   for (const cp of o.checkpoints) {
     if (!cp.enabled || cp.kind === 'start') continue;
     const c = Math.round((cp.d / distance) * (iw - 1));
-    const hgt = 1 + Math.round(((cache.cols[Math.min(iw - 1, c)] - minEle) / range) * (ph - 3));
-    const x = x0 + 2 + c, y = y0 + 1 + ph - hgt;
-    ctx.fillStyle = FLAG_COLOR[cp.kind];
-    if (cp.kind === 'finish') ctx.fillStyle = C.white;
+    const x = x0 + 2 + c, y = y0 + 1 + ph - hAt(c);
+    ctx.fillStyle = KIND_COLOR[cp.kind];
     ctx.fillRect(x, y - 4, 1, 4);
     ctx.fillRect(x + 1, y - 4, 2, 2);
   }
-  // current marker
-  const hgt = 1 + Math.round(((cache.cols[Math.min(iw - 1, Math.max(0, cur))] - minEle) / range) * (ph - 3));
-  const mx = x0 + 2 + cur, my = y0 + 1 + ph - hgt;
+  const mx = x0 + 2 + cur, my = y0 + 1 + ph - hAt(cur);
   ctx.fillStyle = C.ink;
   ctx.fillRect(mx - 2, my - 4, 5, 4);
   ctx.fillStyle = C.coral;
@@ -236,18 +387,18 @@ function drawMinimap(o: OverlayInput, x: number, y: number, size: number) {
     const b = track.bounds;
     const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ) || 1;
     const inner = size - 8;
-    const ox = x0Center(b.minX, b.maxX, span, inner);
-    const oz = x0Center(b.minZ, b.maxZ, span, inner);
+    const ox = ((1 - (b.maxX - b.minX) / span) * inner) / 2;
+    const oz = ((1 - (b.maxZ - b.minZ) / span) * inner) / 2;
     const pts: number[] = [];
     let lx = -999, lz = -999;
     for (let i = 0; i < track.n; i++) {
       const px = Math.round(((track.x[i] - b.minX) / span) * inner + ox);
       const pz = Math.round(((track.z[i] - b.minZ) / span) * inner + oz);
       if (px === lx && pz === lz) continue;
-      pts.push(px, pz, i);
+      pts.push(px, pz, Math.round((i / track.n) * 32767));
       lx = px; lz = pz;
     }
-    cache = { size, pts: Int16Array.from(pts.map((v, k) => (k % 3 === 2 ? Math.min(32767, Math.round((v / track.n) * 32767)) : v))) };
+    cache = { size, pts: Int16Array.from(pts) };
     miniCache.set(track, cache);
   }
   const prog = Math.round((state.d / track.stats.distance) * 32767);
@@ -265,11 +416,11 @@ function drawMinimap(o: OverlayInput, x: number, y: number, size: number) {
   }
 }
 
-function x0Center(min: number, max: number, span: number, inner: number) {
-  return ((1 - (max - min) / span) * inner) / 2;
-}
-
 // ---------------------------------------------------------------- banners / cards
+
+function stayText(min: number) {
+  return min >= 60 ? `${Math.floor(min / 60)}H ${String(min % 60).padStart(2, '0')}M` : `${min} MIN`;
+}
 
 function drawBanner(o: OverlayInput) {
   const { ctx, W, H, state, track } = o;
@@ -278,26 +429,32 @@ function drawBanner(o: OverlayInput) {
   const age = state.t - lr.t;
   if (age < 0 || age > (state.phase === 'pause' ? 99 : 0.35) || state.phase === 'outro') return;
   const cp = lr.cp;
+  const run = o.activity === 'trailrun';
   const exclaim = cp.kind === 'summit' || cp.kind === 'finish';
-  let title = cp.name.toUpperCase() + (exclaim && !cp.name.endsWith('!') ? '!' : '');
+  let title =
+    cp.kind === 'finish' && run && cp.name === 'FINISH' ? 'FINISHER!' : cp.name.toUpperCase() + (exclaim && !cp.name.endsWith('!') ? '!' : '');
   const time = clockText(cp.time, o.tzOffsetMin);
-  const sub =
-    cp.kind === 'rest'
-      ? `${cp.restMin ?? ''} MIN BREAK  ${time}`
-      : cp.kind === 'finish'
-        ? `${(track.stats.distance / 1000).toFixed(1)} KM  ${time}`
-        : `${fmtInt(cp.ele)} M  ${time}`;
+  const elapsed = elapsedText(cp.time - track.stats.startTime);
+  const km = `${((cp.d * track.distScale) / 1000).toFixed(1)} KM`;
+  let sub: string;
+  switch (cp.kind) {
+    case 'rest': sub = `${stayText(cp.stayMin ?? 0)} BREAK  ${time}`; break;
+    case 'camp': sub = `${stayText(cp.stayMin ?? 0)} STAY  ${time}`; break;
+    case 'cp': sub = run ? `${km}  ${elapsed}` : `${km}  ${time}`; break;
+    case 'finish': sub = run ? elapsed : `${km}  ${time}`; break;
+    default: sub = `${fmtInt(cp.ele)} M  ${run ? elapsed : time}`;
+  }
   let scale = 2;
   if (textWidth(title, 2) > W - 24) scale = 1;
   if (textWidth(title, 1) > W - 16) title = title.slice(0, Math.floor((W - 16) / 6));
   const bw = Math.max(textWidth(title, scale), textWidth(sub)) + 16;
   const bh = 7 * scale + 7 + 12;
   const drop = easeOutBack(clamp(age * 4, 0, 1));
-  const top = H > W ? 84 : 30; // portrait: clear the minimap
+  const top = H > W ? 84 : 44; // keep clear of the dial / minimap
   const y = Math.round(top - (1 - drop) * (top + 20));
   const x = Math.round(W / 2 - bw / 2);
   panel(ctx, x, y, bw, bh, C.cream, C.ink);
-  ctx.fillStyle = FLAG_COLOR[cp.kind] === C.white ? C.ink : FLAG_COLOR[cp.kind];
+  ctx.fillStyle = KIND_COLOR[cp.kind] === C.white ? C.ink : KIND_COLOR[cp.kind];
   ctx.fillRect(x + 2, y + 2, bw - 4, 2);
   drawText(ctx, title, W / 2, y + 6, C.ink, { scale, align: 'center' });
   drawText(ctx, sub, W / 2, y + 7 * scale + 9, C.wine, { align: 'center' });
@@ -310,7 +467,7 @@ function drawTitleCard(o: OverlayInput) {
   const slide = clamp((state.t - (end - 0.3)) / 0.3, 0, 1);
   const date = new Date(track.stats.startTime + o.tzOffsetMin * 60000);
   const dateStr = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
-  const statStr = `${(track.stats.distance / 1000).toFixed(1)} KM  ^${fmtInt(track.stats.ascent)} M`;
+  const statStr = `${((track.stats.distance * track.distScale) / 1000).toFixed(1)} KM  ^${fmtInt(track.stats.ascent)} M`;
   let title = o.title.toUpperCase();
   let scale = 2;
   if (textWidth(title, 2) > W - 28) scale = 1;
@@ -331,16 +488,20 @@ function drawOutroCard(o: OverlayInput) {
   const { ctx, W, H, state, track } = o;
   if (state.phase !== 'outro' || state.outroU < 0.2) return;
   const s = track.stats;
-  const hours = Math.floor(s.duration / 3600000);
-  const mins = Math.round((s.duration % 3600000) / 60000);
-  const rows: [string, string][] = [
-    ['DISTANCE', `${(s.distance / 1000).toFixed(1)} KM`],
-    ['TIME', hours ? `${hours}H ${String(mins).padStart(2, '0')}M` : `${mins} MIN`],
-    ['ASCENT', `${fmtInt(s.ascent)} M`],
-    ['HIGHEST', `${fmtInt(s.maxEle)} M`],
-  ];
+  const km = (s.distance * track.distScale) / 1000;
+  const run = o.activity === 'trailrun';
+  const rows: [string, string][] = [['DISTANCE', `${km.toFixed(1)} KM`]];
+  if (run) {
+    rows.push(['TIME', elapsedText(s.duration)]);
+    rows.push(['AVG PACE', `${paceText(s.duration / 1000 / km)}/KM`]);
+  } else rows.push(['TIME', elapsedText(s.duration, false)]);
+  rows.push(['ASCENT', `${fmtInt(s.ascent)} M`]);
+  if (!run) rows.push(['HIGHEST', `${fmtInt(s.maxEle)} M`]);
+  const camps = o.checkpoints.filter((c) => c.enabled && c.kind === 'camp').length;
+  if (o.activity === 'camphike' && camps) rows.push(['NIGHTS', String(camps)]);
   if (s.avgHr) rows.push(['AVG HR', `${Math.round(s.avgHr)} BPM`]);
-  const header = 'HIKE COMPLETE!';
+  if (s.calories && rows.length < 7) rows.push(['CALORIES', `${fmtInt(s.calories)}`]);
+  const header = run ? 'FINISHER!' : o.activity === 'camphike' ? 'TRIP COMPLETE!' : 'HIKE COMPLETE!';
   const labelW = 9 * 6;
   const valW = Math.max(...rows.map((r) => textWidth(r[1])));
   const bw = Math.max(textWidth(header), labelW + valW) + 16;

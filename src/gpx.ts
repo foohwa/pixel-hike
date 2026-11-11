@@ -4,11 +4,26 @@ export interface RawPoint {
   ele: number | null;
   time: number | null; // epoch ms
   hr: number | null;
+  temp?: number | null;
+}
+
+/** Totals reported by the watch itself (FIT session), when available. */
+export interface SessionSummary {
+  distance?: number;
+  ascent?: number;
+  descent?: number;
+  calories?: number;
+  avgHr?: number;
+  maxHr?: number;
+  avgTemp?: number;
 }
 
 export interface ParsedTrack {
   name: string;
   points: RawPoint[];
+  /** Lowercase sport hint, e.g. "hiking", "running", "trail_running". */
+  sport?: string;
+  session?: SessionSummary;
 }
 
 /** Parse a GPX 1.1 file (track points, or route points as a fallback). */
@@ -51,7 +66,9 @@ export function parseGpx(text: string): ParsedTrack {
     doc.querySelector('metadata > name')?.textContent?.trim() ||
     '';
 
-  return { name: prettifyName(rawName), points };
+  const typeText = doc.querySelector('trk > type')?.textContent?.trim().toLowerCase();
+  const suunto = /^suuntoapp-([A-Za-z]+)-/.exec(rawName)?.[1]?.toLowerCase();
+  return { name: prettifyName(rawName), points, sport: typeText || suunto };
 }
 
 /** "suuntoapp-Hiking-2026-10-30T17-59-41Z" -> "Hiking" */

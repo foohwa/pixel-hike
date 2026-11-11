@@ -2,12 +2,13 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { drawOverlay, type ScreenPoint } from './overlay';
+import type { SpriteSet } from './characters';
+import { clockText, drawOverlay, type DialState, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
-import { skyAt } from './sky';
+import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Terrain } from './terrain';
 import type { Timeline } from './timeline';
-import { clamp, gaussian, sampleAt, type Checkpoint, type Track } from './track';
+import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
@@ -25,6 +26,9 @@ export interface SceneData {
   timeline: Timeline;
   title: string;
   tzOffsetMin: number;
+  activity: Activity;
+  hero: SpriteSet;
+  pet: SpriteSet | null;
 }
 
 interface Rig {
@@ -56,6 +60,8 @@ export class PixelRenderer {
   W = 320;
   H = 180;
   private facingLeft = false;
+  private sunEvents: SunEvent[] = [];
+  private toasts: { text: string; t: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -90,6 +96,9 @@ export class PixelRenderer {
         uTime: { value: 0 },
         uRes: { value: new THREE.Vector2(this.W, this.H) },
         uDither: { value: 0.09 },
+        uSun: { value: new THREE.Vector3() },
+        uMoon: { value: new THREE.Vector3() },
+        uMoonPhase: { value: 0.5 },
       },
       vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
       fragmentShader: /* glsl */ `
@@ -97,6 +106,7 @@ export class PixelRenderer {
         uniform vec3 uPal[${PALETTE.length}];
         uniform vec3 uSkyTop; uniform vec3 uSkyBot; uniform float uStars; uniform float uTime;
         uniform vec2 uRes; uniform float uDither;
+        uniform vec3 uSun; uniform vec3 uMoon; uniform float uMoonPhase;
         varying vec2 vUv;
         float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
         float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
@@ -106,7 +116,7 @@ export class PixelRenderer {
           vec3 best = uPal[0]; float bd = 1e9;
           for (int i = 0; i < ${PALETTE.length}; i++) {
             vec3 d = c - uPal[i];
-            float dist = dot(d * d, vec3(0.30, 0.59, 0.11));
+            float dist = dot(d * d, vec3(0.22, 0.45, 0.33)); // keeps hue, so greens stay green
             if (dist < bd) { bd = dist; best = uPal[i]; }
           }
           return best;
@@ -122,6 +132,21 @@ export class PixelRenderer {
             if (uStars > 0.01 && st > 0.985 && vUv.y > 0.3) {
               float tw = step(0.5, fract(st * 91.0 + uTime * 1.3));
               col = mix(col, vec3(0.96), uStars * (0.6 + 0.4 * tw));
+            }
+            // sun and moon at their real positions (only where the sky shows)
+            if (uSun.z > 0.5) {
+              float r = length(px - uSun.xy);
+              if (r <= 5.6) col = r <= 3.6 ? vec3(1.0, 0.914, 0.639) : vec3(1.0, 0.804, 0.459);
+            }
+            if (uMoon.z > 0.5) {
+              vec2 dd = px - uMoon.xy;
+              if (dot(dd, dd) <= 18.5) {
+                float hw = sqrt(max(1e-3, 18.5 - dd.y * dd.y));
+                float xn = dd.x / hw;
+                float k = cos(6.28318 * uMoonPhase);
+                bool lit = uMoonPhase <= 0.5 ? xn >= k : xn <= -k;
+                col = lit ? vec3(1.0, 0.914, 0.639) : mix(col, vec3(0.231, 0.247, 0.42), 0.7);
+              }
             }
           } else col = s.rgb;
           col = quant(col, px);
@@ -169,8 +194,46 @@ export class PixelRenderer {
       this.data = data;
       this.buildTrail();
       this.buildRig();
+      const day = 86400000;
+      this.sunEvents = sunEvents(data.track.stats.startTime - 1.5 * day, data.track.stats.endTime + 1.5 * day, data.track.lat0, data.track.lon0);
     }
     this.data = data;
+    this.toasts = [];
+    for (const ev of this.sunEvents) {
+      const t = data.timeline.videoTimeAtClock(ev.ms);
+      if (t == null || t < data.timeline.intro) continue;
+      this.toasts.push({ text: `${ev.kind === 'sunrise' ? 'SUNRISE' : 'SUNSET'} ${clockText(ev.ms, data.tzOffsetMin)}`, t });
+    }
+  }
+
+  private dialAt(ms: number): DialState {
+    const ev = this.sunEvents;
+    let prev: SunEvent | null = null, next: SunEvent | null = null;
+    for (const e of ev) {
+      if (e.ms <= ms) prev = e;
+      else { next = e; break; }
+    }
+    const t = this.data!.track;
+    const isDay = prev ? prev.kind === 'sunrise' : sunPosition(ms, t.lat0, t.lon0).elevation > 0;
+    const a = prev?.ms ?? ms - 6 * 3600_000, b = next?.ms ?? ms + 6 * 3600_000;
+    return { isDay, frac: (ms - a) / (b - a), moonPhase: moonPhase(ms) };
+  }
+
+  /** Screen pixel (post-shader coords, y up) of a sky direction, or z = 0 when not visible. */
+  private skyPoint(az: number, el: number, out: THREE.Vector3) {
+    if (el < -0.03) return out.set(0, 0, 0);
+    const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+    // Real compass direction; if it's higher than the frame shows, pin it just inside the top edge
+    // so the sun/moon still appear wherever sky is visible (the shader only draws on sky pixels).
+    const v = this.camera.position.clone().addScaledVector(dir, this.camera.far * 0.5).applyMatrix4(this.camera.matrixWorldInverse);
+    if (v.z > -1) {
+      // behind the camera: only usable when the body is high overhead and we're looking up-ish — skip
+      return out.set(0, 0, 0);
+    }
+    const p = v.applyMatrix4(this.camera.projectionMatrix);
+    if (Math.abs(p.x) > 1.05 || p.y < -1) return out.set(0, 0, 0);
+    const y = Math.min(p.y, 1 - 16 / this.H);
+    return out.set(Math.round(((p.x + 1) / 2) * this.W), Math.round(((y + 1) / 2) * this.H), 1);
   }
 
   // ------------------------------------------------------------------ build
@@ -342,7 +405,7 @@ export class PixelRenderer {
     this.camera.updateMatrixWorld();
 
     // ---- sky / light
-    const ms = st.phase === 'intro' ? track.stats.startTime : st.phase === 'outro' ? track.stats.endTime : sampleAt(track, track.time, st.d);
+    const ms = st.clockMs;
     const sky = skyAt(ms, track.lat0, track.lon0);
     shared.uSunDir.value.set(...sky.lightDir);
     shared.uSunCol.value.setRGB(...sky.sunColor);
@@ -386,19 +449,29 @@ export class PixelRenderer {
       cpScreen.set(cp.id, this.project(x, terrain.worldY(x, z), z));
     }
 
+    const petAt = this.data.pet
+      ? { x: hiker.x + (this.facingLeft ? 11 : -11), y: hiker.y + 1, visible: hiker.visible }
+      : null;
     drawOverlay({
       ctx: this.overlayCtx,
       W: this.W,
       H: this.H,
       track,
+      activity: this.data.activity,
       checkpoints,
       timeline,
       state: st,
       sky,
+      dial: this.dialAt(ms),
+      toasts: this.toasts,
       title: this.data.title,
       tzOffsetMin: this.data.tzOffsetMin,
-      hiker,
+      hero: this.data.hero,
+      heroAt: hiker,
       facingLeft: this.facingLeft,
+      pet: this.data.pet,
+      petAt,
+      petFacingLeft: this.facingLeft,
       cpScreen,
       showMinimap: this.showMinimap,
     });
@@ -410,6 +483,12 @@ export class PixelRenderer {
     pu.uSkyBot.value.set(...sky.bottom);
     pu.uStars.value = sky.stars;
     pu.uTime.value = st.t;
+    const sp = sunPosition(ms, track.lat0, track.lon0);
+    const mp = moonPosition(ms, track.lat0, track.lon0);
+    this.skyPoint(sp.azimuth, sp.elevation, pu.uSun.value);
+    this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
+    if (pu.uSun.value.z > 0.5) pu.uMoon.value.z = 0; // keep it simple: one disc at a time
+    pu.uMoonPhase.value = moonPhase(ms);
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);

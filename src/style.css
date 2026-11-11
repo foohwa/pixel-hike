@@ -74,12 +74,20 @@ button.primary:hover:not(:disabled) { background: var(--yellow); }
 .seg button { flex: 1; box-shadow: none; }
 .seg button.on { background: var(--yellow); color: var(--ink); }
 
-.cps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
-.cps li { display: grid; grid-template-columns: 18px 10px 1fr; gap: 6px; align-items: center; }
+.cps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.cps li { display: grid; grid-template-columns: 16px 10px 1fr 86px 18px; gap: 5px; align-items: center; }
 .cps li.muted { display: block; color: var(--grey); }
 .cps .chip { width: 10px; height: 10px; border: 2px solid #000; }
-.cps input[type='text'] { padding: 3px 6px; font-size: 12px; }
-.cps .meta { grid-column: 3; color: var(--grey); font-size: 10px; margin-top: -2px; }
+.cps input[type='text'], .cps select { padding: 3px 4px; font-size: 11px; }
+.cps .meta { grid-column: 3 / 6; color: var(--grey); font-size: 10px; margin-top: -3px; }
+.cps .del { padding: 0; width: 18px; height: 18px; box-shadow: none; font-size: 11px; background: transparent; border-color: transparent; color: var(--grey); }
+.cps .del:hover:not(:disabled) { color: var(--red); background: transparent; }
+.cps .del:disabled { visibility: hidden; }
+button.mini { font-size: 11px; padding: 4px 8px; box-shadow: none; }
+.row.small { font-size: 11px; }
+.link { color: var(--sky); cursor: pointer; text-decoration: underline; }
+#charPreview { width: 128px; height: 32px; image-rendering: pixelated; background: var(--ink); border: 2px solid var(--night); }
+.field > span i { color: var(--grey); font-style: normal; text-transform: none; letter-spacing: 0; }
 
 progress { width: 100%; height: 10px; accent-color: var(--green); }
 #download { color: var(--green); font-size: 13px; }

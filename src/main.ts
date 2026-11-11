@@ -1,12 +1,17 @@
 import './style.css';
+import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type SpriteSet } from './characters';
 import { loadDem } from './dem';
 import { exportMp4 } from './export';
-import { parseGpx } from './gpx';
-import { C } from './palette';
+import { parseFit } from './fit';
+import { parseGpx, type ParsedTrack } from './gpx';
+import { KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { buildTerrain, terrainExtent, type Terrain } from './terrain';
-import { Timeline } from './timeline';
-import { buildTrack, clamp, toLatLon, type Checkpoint, type Track } from './track';
+import { defaultDuration, Timeline } from './timeline';
+import {
+  ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
+  type Activity, type Checkpoint, type CheckpointKind, type Track,
+} from './track';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -14,13 +19,22 @@ const ui = {
   drop: $('drop'),
   file: $<HTMLInputElement>('file'),
   title: $<HTMLInputElement>('title'),
+  activity: $('activity'),
+  character: $('character'),
+  companion: $<HTMLSelectElement>('companion'),
+  charPreview: $<HTMLCanvasElement>('charPreview'),
+  sheet: $<HTMLInputElement>('sheet'),
+  template: $<HTMLButtonElement>('template'),
+  resetSheet: $<HTMLButtonElement>('resetSheet'),
   mode: $('mode'),
   aspect: $('aspect'),
   duration: $<HTMLInputElement>('duration'),
   durLabel: $('durLabel'),
+  speedLabel: $('speedLabel'),
   minimap: $<HTMLInputElement>('minimap'),
   tz: $<HTMLSelectElement>('tz'),
   cps: $('cps'),
+  addCp: $<HTMLButtonElement>('addCp'),
   quality: $<HTMLSelectElement>('quality'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
@@ -41,6 +55,11 @@ const state = {
   terrain: null as Terrain | null,
   checkpoints: [] as Checkpoint[],
   timeline: null as Timeline | null,
+  activity: 'hike' as Activity,
+  character: 'hiker' as CharacterId,
+  companion: null as CharacterId | null,
+  customSheet: null as SpriteSet | null,
+  customCount: 0,
   t: 0,
   playing: true,
   exporting: false,
@@ -49,49 +68,57 @@ const state = {
 
 // ------------------------------------------------------------------ loading
 
-async function loadGpxText(text: string) {
+async function loadFile(f: File) {
   try {
     setStatus('Reading track…');
-    const parsed = parseGpx(text);
-    const track = buildTrack(parsed.points);
-
-    setStatus('Loading terrain…');
-    const ext = terrainExtent(track);
-    const pad = 300;
-    const a = toLatLon(track, ext.x0 - pad, ext.z0 - pad);
-    const b = toLatLon(track, ext.x0 + ext.W + pad, ext.z0 + ext.D + pad);
-    const dem = await loadDem(
-      { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) },
-      (done, total) => setStatus(`Loading terrain… ${done}/${total}`),
-    ).catch((e) => {
-      console.warn('Elevation tiles unavailable, using a stylised ridge instead.', e);
-      return null;
-    });
-
-    setStatus('Building diorama…');
-    await new Promise((r) => setTimeout(r, 0));
-    const terrain = buildTerrain(track, dem);
-
-    state.track = track;
-    state.terrain = terrain;
-    state.checkpoints = track.checkpoints.map((c) => ({ ...c }));
-    ui.title.value = parsed.name;
-    ui.duration.value = String(clamp(Math.round(20 + (track.stats.distance / 1000) * 0.4), 25, 60));
-    ui.durLabel.textContent = `${ui.duration.value}s`;
-    fillTimezones(track.stats.startTime);
-    renderCheckpointList();
-    renderStats();
-    rebuild();
-    state.t = 0;
-    state.playing = true;
-    [ui.play, ui.scrub, ui.export].forEach((el) => (el.disabled = false));
-    ui.play.innerHTML = '&#9208;';
-    setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
-    if (!dem) setTimeout(() => setStatus(''), 3000);
+    const parsed: ParsedTrack = /\.fit$/i.test(f.name) ? parseFit(await f.arrayBuffer()) : parseGpx(await f.text());
+    await loadParsed(parsed);
   } catch (e) {
     console.error(e);
     setStatus((e as Error).message || 'Could not read that file.', true);
   }
+}
+
+async function loadParsed(parsed: ParsedTrack) {
+  const track = buildTrack(parsed);
+
+  setStatus('Loading terrain…');
+  const ext = terrainExtent(track);
+  const pad = 300;
+  const a = toLatLon(track, ext.x0 - pad, ext.z0 - pad);
+  const b = toLatLon(track, ext.x0 + ext.W + pad, ext.z0 + ext.D + pad);
+  const dem = await loadDem(
+    { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) },
+    (done, total) => setStatus(`Loading terrain… ${done}/${total}`),
+  ).catch((e) => {
+    console.warn('Elevation tiles unavailable, using a stylised ridge instead.', e);
+    return null;
+  });
+
+  setStatus('Building diorama…');
+  await new Promise((r) => setTimeout(r, 0));
+  const terrain = buildTerrain(track, dem);
+
+  state.track = track;
+  state.terrain = terrain;
+  state.customCount = 0;
+  state.checkpoints = [];
+  setActivity(guessActivity(track), false);
+  ui.title.value = parsed.name;
+  ui.duration.value = String(defaultDuration(track));
+  fillTimezones(track.stats.startTime);
+  renderStats();
+  rebuild();
+  state.t = 0;
+  state.playing = true;
+  [ui.play, ui.scrub, ui.export, ui.addCp].forEach((el) => (el.disabled = false));
+  ui.play.innerHTML = '&#9208;';
+  setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
+  if (!dem) setTimeout(() => setStatus(''), 3000);
+}
+
+function heroSet(): SpriteSet {
+  return state.customSheet ?? builtInSet(state.character);
 }
 
 function rebuild() {
@@ -104,8 +131,34 @@ function rebuild() {
     timeline: state.timeline,
     title: ui.title.value || 'My Hike',
     tzOffsetMin: Number(ui.tz.value || 0),
+    activity: state.activity,
+    hero: heroSet(),
+    pet: state.companion ? builtInSet(state.companion) : null,
   });
   state.t = Math.min(state.t, state.timeline.duration);
+  ui.durLabel.textContent = `${ui.duration.value}s`;
+  const x = state.timeline.speedup();
+  ui.speedLabel.textContent = x ? `· walking ≈ ${x >= 100 ? Math.round(x / 10) * 10 : Math.round(x)}× real speed` : '';
+}
+
+function setActivity(a: Activity, rebuildNow = true) {
+  state.activity = a;
+  ui.activity.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === a));
+  if (state.track) {
+    // re-detect, but keep checkpoints the user added
+    const custom = state.checkpoints.filter((c) => c.id.startsWith('custom'));
+    state.checkpoints = [...detectCheckpoints(state.track, a), ...custom].sort((x, y) => x.d - y.d);
+    renderCheckpointList();
+  }
+  if (a === 'trailrun' && state.character === 'hiker') setCharacter('runner', false);
+  if (a !== 'trailrun' && state.character === 'runner') setCharacter('hiker', false);
+  if (rebuildNow) rebuild();
+}
+
+function setCharacter(c: CharacterId, rebuildNow = true) {
+  state.character = c;
+  ui.character.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === c));
+  if (rebuildNow) rebuild();
 }
 
 // ------------------------------------------------------------------ UI
@@ -129,46 +182,87 @@ function fillTimezones(startMs: number) {
   }
 }
 
-const KIND_COLOR: Record<Checkpoint['kind'], string> = {
-  start: C.greenLight, summit: C.red, peak: C.yellow, rest: C.orange, finish: C.white,
-};
+const EDITABLE_KINDS: CheckpointKind[] = ['summit', 'peak', 'view', 'rest', 'camp', 'cp'];
+
+function defaultName(k: CheckpointKind) {
+  return ({ start: 'START', summit: 'SUMMIT', peak: 'PEAK', view: 'VIEWPOINT', rest: 'REST', camp: 'CAMP', cp: 'CP', finish: 'FINISH' })[k];
+}
 
 function renderCheckpointList() {
   ui.cps.innerHTML = '';
   for (const cp of state.checkpoints) {
     const li = document.createElement('li');
+    const fixed = cp.kind === 'start' || cp.kind === 'finish';
+
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = cp.enabled;
-    cb.disabled = cp.kind === 'start' || cp.kind === 'finish';
+    cb.disabled = fixed;
     cb.onchange = () => { cp.enabled = cb.checked; rebuild(); };
+
     const chip = document.createElement('span');
     chip.className = 'chip';
     chip.style.background = KIND_COLOR[cp.kind];
+
     const name = document.createElement('input');
     name.type = 'text';
     name.maxLength = 18;
     name.value = cp.name;
-    name.oninput = () => { cp.name = name.value || cp.kind.toUpperCase(); };
+    name.oninput = () => { cp.name = name.value || defaultName(cp.kind); };
+
+    const kind = document.createElement('select');
+    kind.disabled = fixed;
+    for (const k of fixed ? [cp.kind] : EDITABLE_KINDS) {
+      const o = document.createElement('option');
+      o.value = k;
+      o.textContent = KIND_LABEL[k];
+      o.selected = k === cp.kind;
+      kind.append(o);
+    }
+    kind.onchange = () => {
+      const old = cp.kind;
+      cp.kind = kind.value as CheckpointKind;
+      if (cp.name.startsWith(defaultName(old))) cp.name = defaultName(cp.kind);
+      renderCheckpointList();
+      rebuild();
+    };
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '✕';
+    del.title = 'Remove checkpoint';
+    del.disabled = fixed;
+    del.onclick = () => {
+      state.checkpoints = state.checkpoints.filter((c) => c !== cp);
+      renderCheckpointList();
+      rebuild();
+    };
+
     const meta = document.createElement('div');
     meta.className = 'meta';
-    const extra = cp.kind === 'rest' ? ` · ${cp.restMin} min` : '';
-    meta.textContent = `${cp.kind} · km ${(cp.d / 1000).toFixed(1)} · ${Math.round(cp.ele).toLocaleString()} m${extra}`;
-    li.append(cb, chip, name, document.createElement('span'), document.createElement('span'), meta);
+    const m = cp.stayMin ?? 0;
+    const stay = m ? ` · stayed ${m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${m} min`}` : '';
+    meta.textContent = `km ${((cp.d * (state.track?.distScale ?? 1)) / 1000).toFixed(1)} · ${Math.round(cp.ele).toLocaleString()} m${stay}`;
+
+    li.append(cb, chip, name, kind, del, meta);
     ui.cps.append(li);
   }
 }
 
 function renderStats() {
-  const s = state.track!.stats;
+  const tr = state.track!;
+  const s = tr.stats;
   const h = Math.floor(s.duration / 3600000), m = Math.round((s.duration % 3600000) / 60000);
   const items: [string, string][] = [
-    ['Distance', `${(s.distance / 1000).toFixed(2)} km`],
+    ['Distance', `${((s.distance * tr.distScale) / 1000).toFixed(2)} km`],
     ['Duration', `${h}h ${String(m).padStart(2, '0')}m`],
     ['Ascent', `${Math.round(s.ascent).toLocaleString()} m`],
     ['Highest', `${Math.round(s.maxEle).toLocaleString()} m`],
   ];
   if (s.avgHr) items.push(['Avg HR', `${Math.round(s.avgHr)} bpm`]);
+  if (s.calories) items.push(['Calories', `${Math.round(s.calories).toLocaleString()} kcal`]);
+  if (s.avgTemp != null) items.push(['Avg temp', `${Math.round(s.avgTemp)} °C`]);
+  items.push(['Looks like', ACTIVITY_LABEL[guessActivity(tr)]]);
   ui.stats.innerHTML = items.map(([k, v]) => `<div>${k} <b>${v}</b></div>`).join('');
 }
 
@@ -188,12 +282,60 @@ function fitCanvas() {
   ui.canvas.style.height = `${renderer.H * s}px`;
 }
 
+function download(url: string, name: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+}
+
 bindSeg(ui.mode, (v) => renderer.setMode(v as ViewMode));
 bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); });
-ui.duration.oninput = () => { ui.durLabel.textContent = `${ui.duration.value}s`; rebuild(); };
+bindSeg(ui.activity, (v) => setActivity(v as Activity));
+bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
+ui.companion.onchange = () => { state.companion = (ui.companion.value || null) as CharacterId | null; rebuild(); };
+ui.duration.oninput = () => rebuild();
 ui.title.oninput = () => rebuild();
 ui.tz.onchange = () => rebuild();
 ui.minimap.onchange = () => (renderer.showMinimap = ui.minimap.checked);
+
+ui.sheet.onchange = async () => {
+  const f = ui.sheet.files?.[0];
+  if (!f) return;
+  try {
+    state.customSheet = await loadSheet(f, state.character);
+    ui.resetSheet.hidden = false;
+    rebuild();
+  } catch (e) {
+    setStatus((e as Error).message, true);
+    setTimeout(() => setStatus(''), 4000);
+  }
+  ui.sheet.value = '';
+};
+ui.resetSheet.onclick = () => { state.customSheet = null; ui.resetSheet.hidden = true; rebuild(); };
+ui.template.onclick = () => {
+  download(renderSheet(heroSet(), 8).toDataURL('image/png'), `pixel-hike-${state.character}-sheet-8x.png`);
+};
+
+ui.addCp.onclick = () => {
+  if (!state.track || !state.timeline) return;
+  const tr = state.track;
+  const d = state.timeline.sample(state.t).d;
+  if (d <= 0 || d >= tr.stats.distance) {
+    setStatus('Scrub to a point along the trail first.');
+    setTimeout(() => setStatus(''), 2000);
+    return;
+  }
+  const kind: CheckpointKind = state.activity === 'trailrun' ? 'cp' : 'view';
+  const time = sampleAt(tr, tr.time, d);
+  state.checkpoints.push({
+    id: `custom${state.customCount++}`, kind, name: defaultName(kind), enabled: true,
+    d, ele: sampleAt(tr, tr.ele, d), time, leaveTime: time,
+  });
+  state.checkpoints.sort((a, b) => a.d - b.d);
+  renderCheckpointList();
+  rebuild();
+};
 
 ui.play.onclick = () => {
   state.playing = !state.playing;
@@ -209,23 +351,18 @@ ui.scrub.onpointerup = () => (state.scrubbing = false);
 
 ui.file.onchange = async () => {
   const f = ui.file.files?.[0];
-  if (f) await loadGpxText(await f.text());
+  if (f) await loadFile(f);
 };
-ui.drop.addEventListener('dragover', (e) => { e.preventDefault(); ui.drop.classList.add('hover'); });
-ui.drop.addEventListener('dragleave', () => ui.drop.classList.remove('hover'));
-ui.drop.addEventListener('drop', async (e) => {
-  e.preventDefault();
-  ui.drop.classList.remove('hover');
-  const f = e.dataTransfer?.files?.[0];
-  if (f) await loadGpxText(await f.text());
-});
-// allow dropping anywhere on the preview too
-ui.screen.addEventListener('dragover', (e) => e.preventDefault());
-ui.screen.addEventListener('drop', async (e) => {
-  e.preventDefault();
-  const f = e.dataTransfer?.files?.[0];
-  if (f) await loadGpxText(await f.text());
-});
+for (const el of [ui.drop, ui.screen]) {
+  el.addEventListener('dragover', (e) => { e.preventDefault(); ui.drop.classList.add('hover'); });
+  el.addEventListener('dragleave', () => ui.drop.classList.remove('hover'));
+  el.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    ui.drop.classList.remove('hover');
+    const f = e.dataTransfer?.files?.[0];
+    if (f) await loadFile(f);
+  });
+}
 
 let exportAbort: AbortController | null = null;
 ui.export.onclick = async () => {
@@ -262,6 +399,7 @@ ui.export.onclick = async () => {
 
 // ------------------------------------------------------------------ loop
 
+const previewCtx = ui.charPreview.getContext('2d')!;
 let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -275,17 +413,27 @@ function frame(now: number) {
     ui.scrub.value = String(Math.round((Math.min(state.t, state.timeline.duration) / state.timeline.duration) * 1000));
     ui.clock.textContent = `${Math.min(state.t, state.timeline.duration).toFixed(1)}s / ${state.timeline.duration}s`;
   }
+  // walk-cycle preview of the chosen character (+ buddy)
+  const secs = now / 1000;
+  previewCtx.clearRect(0, 0, 64, 16);
+  const walkAnim = state.activity === 'trailrun' ? 'run' : 'walk';
+  if (state.companion) previewCtx.drawImage(frameOf(builtInSet(state.companion), walkAnim, secs + 0.13, false), 14, 0);
+  previewCtx.drawImage(frameOf(heroSet(), walkAnim, secs, false), 30, 0);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-// Dev/test hooks: ?sample loads public/samples/hike.gpx (git-ignored).
+// Dev/test hooks: ?sample loads public/samples/hike.gpx (?sample=fit → hike.fit). Both are git-ignored.
 const params = new URLSearchParams(location.search);
-const ready = params.has('sample')
-  ? fetch('/samples/hike.gpx').then((r) => (r.ok ? r.text() : Promise.reject(new Error('No sample file')))).then(loadGpxText)
-  : Promise.resolve();
+const sampleKind = params.get('sample');
+const ready =
+  sampleKind != null
+    ? fetch(sampleKind === 'fit' ? '/samples/hike.fit' : '/samples/hike.gpx')
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('No sample file'))))
+        .then((b) => loadFile(new File([b], sampleKind === 'fit' ? 'hike.fit' : 'hike.gpx')))
+    : Promise.resolve();
 
 Object.assign(window, {
   __pixelHike: {
@@ -294,10 +442,16 @@ Object.assign(window, {
     seek(t: number) { state.playing = false; state.t = t; renderer.renderAt(t); },
     setMode(m: ViewMode) { renderer.setMode(m); },
     setAspect(a: Aspect) { renderer.setAspect(a); fitCanvas(); },
+    setActivity(a: Activity) { setActivity(a); },
+    setCharacter(c: CharacterId) { setCharacter(c); },
+    setCompanion(c: CharacterId | null) { state.companion = c; rebuild(); },
+    setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
+    sheetDataUrl(c: CharacterId, scale = 1, guides = false) { return renderSheet(builtInSet(c), scale, guides).toDataURL('image/png'); },
     get duration() { return state.timeline?.duration ?? 0; },
     get checkpoints() { return state.checkpoints; },
     get timeline() { return state.timeline; },
     get stats() { return state.track?.stats; },
+    get speedup() { return state.timeline?.speedup(); },
     exportMp4: (scale = 4, duration?: number) =>
       exportMp4(renderer, { duration: duration ?? state.timeline!.duration, fps: 30, scale }),
   },

@@ -1,32 +1,41 @@
-import { clamp, distAtCost, type Checkpoint, type Track } from './track';
+import { clamp, distAtCost, lerp, sampleAt, type Checkpoint, type Track } from './track';
 
+/** Seconds of video spent paused at each kind of checkpoint. */
 export const PAUSE_SECONDS: Record<Checkpoint['kind'], number> = {
   start: 0,
-  summit: 2.6,
-  peak: 1.6,
-  rest: 1.2,
-  finish: 1.4,
+  summit: 2.8,
+  peak: 1.8,
+  view: 1.6,
+  rest: 1.4,
+  camp: 3.6, // long enough to time-lapse a night
+  cp: 1.2,
+  finish: 1.6,
 };
 
 export const INTRO_SECONDS = 2.8;
-export const OUTRO_SECONDS = 4.2;
+export const OUTRO_SECONDS = 4.4;
 
 type Event =
-  | { kind: 'move'; t0: number; t1: number; c0: number; c1: number }
+  | { kind: 'move'; t0: number; t1: number; c0: number; c1: number; minClock: number }
   | { kind: 'pause'; t0: number; t1: number; cp: Checkpoint };
 
 export interface TimelineState {
   t: number;
   phase: 'intro' | 'move' | 'pause' | 'outro';
   d: number; // metres along the track
-  /** 0..1 progress through intro / outro (0 otherwise / 1 after). */
+  /** Real-world time shown on the clock (fast-forwards through stays at camps/rests). */
+  clockMs: number;
   introU: number;
   outroU: number;
-  /** Checkpoint we're currently paused at, if any. */
   pauseCp: Checkpoint | null;
   pauseU: number;
-  /** Most recently reached checkpoint and when (video seconds). */
   lastReached: { cp: Checkpoint; t: number } | null;
+}
+
+/** Default video length for a track: long hikes get more time so the walk doesn't feel rushed. */
+export function defaultDuration(track: Track) {
+  const km = track.stats.distance / 1000;
+  return Math.round(clamp(30 + km * 0.75, 30, 90));
 }
 
 export class Timeline {
@@ -35,7 +44,10 @@ export class Timeline {
   readonly outro = OUTRO_SECONDS;
   readonly events: Event[] = [];
   readonly reachTimes = new Map<string, number>();
+  readonly moveSeconds: number;
   private track: Track;
+  private clockSamples: Float64Array | null = null;
+  private static readonly SAMPLE_HZ = 20;
 
   constructor(track: Track, checkpoints: Checkpoint[], duration: number) {
     this.track = track;
@@ -44,29 +56,33 @@ export class Timeline {
     const stops = checkpoints
       .filter((c) => c.enabled && c.kind !== 'start')
       .sort((a, b) => a.d - b.d);
+
     let pauseTotal = stops.reduce((s, c) => s + PAUSE_SECONDS[c.kind], 0);
     const available = duration - this.intro - this.outro;
     const maxPause = available * 0.35;
     const pauseScale = pauseTotal > maxPause ? maxPause / pauseTotal : 1;
     pauseTotal *= pauseScale;
     const moveTotal = Math.max(1, available - pauseTotal);
+    this.moveSeconds = moveTotal;
 
     let t = this.intro;
     let c = 0;
+    let minClock = track.stats.startTime; // clock never runs backwards after a time-lapsed stay
     for (const cp of stops) {
       const cc = track.cost[Math.min(track.n - 1, Math.round(cp.d / track.step))];
       const dt = moveTotal * (cc - c);
-      if (dt > 0.001) this.events.push({ kind: 'move', t0: t, t1: t + dt, c0: c, c1: cc });
+      if (dt > 0.001) this.events.push({ kind: 'move', t0: t, t1: t + dt, c0: c, c1: cc, minClock });
       t += Math.max(0, dt);
       c = cc;
       const p = PAUSE_SECONDS[cp.kind] * pauseScale;
       this.events.push({ kind: 'pause', t0: t, t1: t + p, cp });
       this.reachTimes.set(cp.id, t);
       t += p;
+      minClock = Math.max(minClock, cp.leaveTime);
     }
     if (c < 1) {
       const dt = moveTotal * (1 - c);
-      this.events.push({ kind: 'move', t0: t, t1: t + dt, c0: c, c1: 1 });
+      this.events.push({ kind: 'move', t0: t, t1: t + dt, c0: c, c1: 1, minClock });
     }
     const start = checkpoints.find((cp) => cp.kind === 'start');
     if (start) this.reachTimes.set(start.id, 0);
@@ -74,11 +90,13 @@ export class Timeline {
 
   sample(tRaw: number): TimelineState {
     const t = clamp(tRaw, 0, this.duration);
+    const tr = this.track;
     const outroStart = this.duration - this.outro;
     const base: TimelineState = {
       t,
       phase: 'move',
       d: 0,
+      clockMs: tr.stats.startTime,
       introU: clamp(t / this.intro, 0, 1),
       outroU: clamp((t - outroStart) / this.outro, 0, 1),
       pauseCp: null,
@@ -91,20 +109,46 @@ export class Timeline {
     }
 
     if (t < this.intro) return { ...base, phase: 'intro', d: 0 };
-    if (t >= outroStart) return { ...base, phase: 'outro', d: this.track.stats.distance };
+    if (t >= outroStart) return { ...base, phase: 'outro', d: tr.stats.distance, clockMs: tr.stats.endTime };
 
     for (const e of this.events) {
       if (t < e.t0 || t >= e.t1) continue;
       const u = (t - e.t0) / (e.t1 - e.t0);
       if (e.kind === 'pause') {
-        return { ...base, phase: 'pause', d: e.cp.d, pauseCp: e.cp, pauseU: u };
+        // time-lapse through the stay (a night at camp, a long lunch…)
+        const s = u * u * (3 - 2 * u);
+        return { ...base, phase: 'pause', d: e.cp.d, pauseCp: e.cp, pauseU: u, clockMs: lerp(e.cp.time, e.cp.leaveTime, s) };
       }
-      // Ease a little into and out of every checkpoint.
+      // Ease into and out of every checkpoint.
       const s = u * u * (3 - 2 * u);
-      const ue = u + (s - u) * 0.35;
-      return { ...base, phase: 'move', d: distAtCost(this.track, e.c0 + (e.c1 - e.c0) * ue) };
+      const ue = u + (s - u) * 0.5;
+      const d = distAtCost(tr, e.c0 + (e.c1 - e.c0) * ue);
+      return { ...base, phase: 'move', d, clockMs: Math.max(sampleAt(tr, tr.time, d), e.minClock) };
     }
-    // Between the last event and the outro (e.g. finish pause ended).
-    return { ...base, phase: 'move', d: this.track.stats.distance };
+    return { ...base, phase: 'move', d: tr.stats.distance, clockMs: tr.stats.endTime };
+  }
+
+  /** First video time at which the on-screen clock reaches `ms` (or null if never). */
+  videoTimeAtClock(ms: number): number | null {
+    if (!this.clockSamples) {
+      const n = Math.ceil(this.duration * Timeline.SAMPLE_HZ) + 1;
+      this.clockSamples = new Float64Array(n);
+      for (let i = 0; i < n; i++) this.clockSamples[i] = this.sample(i / Timeline.SAMPLE_HZ).clockMs;
+    }
+    const cs = this.clockSamples;
+    if (ms < cs[0] || ms > cs[cs.length - 1]) return null;
+    for (let i = 1; i < cs.length; i++) {
+      if (cs[i] >= ms) {
+        const span = cs[i] - cs[i - 1];
+        return (i - 1 + (span > 0 ? (ms - cs[i - 1]) / span : 0)) / Timeline.SAMPLE_HZ;
+      }
+    }
+    return null;
+  }
+
+  /** How much faster than real life the walking parts play. */
+  speedup(): number {
+    const moving = this.track.stats.movingTime / 1000;
+    return moving > 0 ? moving / this.moveSeconds : 0;
   }
 }

@@ -42,10 +42,10 @@ interface Stop {
 }
 
 const STOPS: Stop[] = [
-  { e: -18, top: C.ink, bottom: C.ink2, sun: [0.32, 0.36, 0.6], amb: [0.26, 0.28, 0.44], stars: 1, lamp: 1 },
-  { e: -9, top: C.ink2, bottom: C.plum, sun: [0.38, 0.36, 0.6], amb: [0.3, 0.3, 0.46], stars: 0.7, lamp: 1 },
-  { e: -3, top: C.dusk, bottom: C.pink, sun: [0.75, 0.55, 0.55], amb: [0.42, 0.38, 0.5], stars: 0, lamp: 0.5 },
-  { e: 3, top: C.sky, bottom: C.orange, sun: [1.0, 0.75, 0.52], amb: [0.5, 0.47, 0.52], stars: 0, lamp: 0 },
+  { e: -18, top: C.ink, bottom: C.ink2, sun: [0.2, 0.25, 0.4], amb: [0.17, 0.21, 0.32], stars: 1, lamp: 1 },
+  { e: -9, top: C.ink2, bottom: C.plum, sun: [0.28, 0.28, 0.46], amb: [0.24, 0.25, 0.38], stars: 0.7, lamp: 1 },
+  { e: -3, top: C.dusk, bottom: C.pink, sun: [0.7, 0.55, 0.55], amb: [0.5, 0.48, 0.55], stars: 0, lamp: 0.5 },
+  { e: 3, top: C.sky, bottom: C.orange, sun: [0.8, 0.62, 0.46], amb: [0.66, 0.64, 0.62], stars: 0, lamp: 0 },
   { e: 14, top: C.sky, bottom: C.skyPale, sun: [0.62, 0.6, 0.52], amb: [0.68, 0.7, 0.7], stars: 0, lamp: 0 },
 ];
 
@@ -79,4 +79,77 @@ export function skyAt(ms: number, lat: number, lon: number): SkyState {
     lamp: a.lamp + (b.lamp - a.lamp) * f,
     isNight: eDeg < -4,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Moon (low-precision formulas after SunCalc, BSD-2 © Vladimir Agafonkin)
+
+const RAD = Math.PI / 180;
+const OBLIQ = RAD * 23.4397;
+const daysJ2000 = (ms: number) => ms / 86400000 - 10957.5;
+const raOf = (l: number, b: number) => Math.atan2(Math.sin(l) * Math.cos(OBLIQ) - Math.tan(b) * Math.sin(OBLIQ), Math.cos(l));
+const decOf = (l: number, b: number) => Math.asin(Math.sin(b) * Math.cos(OBLIQ) + Math.cos(b) * Math.sin(OBLIQ) * Math.sin(l));
+
+function sunCoords(d: number) {
+  const M = RAD * (357.5291 + 0.98560028 * d);
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + RAD * 102.9372 + Math.PI;
+  return { dec: decOf(L, 0), ra: raOf(L, 0) };
+}
+
+function moonCoords(d: number) {
+  const L = RAD * (218.316 + 13.176396 * d);
+  const M = RAD * (134.963 + 13.064993 * d);
+  const F = RAD * (93.272 + 13.22935 * d);
+  const l = L + RAD * 6.289 * Math.sin(M);
+  const b = RAD * 5.128 * Math.sin(F);
+  return { ra: raOf(l, b), dec: decOf(l, b), dist: 385001 - 20905 * Math.cos(M) };
+}
+
+/** Moon elevation/azimuth (radians, azimuth clockwise from north). */
+export function moonPosition(ms: number, lat: number, lon: number) {
+  const d = daysJ2000(ms);
+  const c = moonCoords(d);
+  const H = RAD * (280.16 + 360.9856235 * d) + RAD * lon - c.ra;
+  const phi = RAD * lat;
+  const elevation = Math.asin(Math.sin(phi) * Math.sin(c.dec) + Math.cos(phi) * Math.cos(c.dec) * Math.cos(H));
+  const azimuth = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(c.dec) * Math.cos(phi)) + Math.PI;
+  return { elevation, azimuth };
+}
+
+/** 0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = last quarter. */
+export function moonPhase(ms: number): number {
+  const d = daysJ2000(ms);
+  const s = sunCoords(d), m = moonCoords(d), sdist = 149598000;
+  const phi = Math.acos(Math.sin(s.dec) * Math.sin(m.dec) + Math.cos(s.dec) * Math.cos(m.dec) * Math.cos(s.ra - m.ra));
+  const inc = Math.atan2(sdist * Math.sin(phi), m.dist - sdist * Math.cos(phi));
+  const angle = Math.atan2(
+    Math.cos(s.dec) * Math.sin(s.ra - m.ra),
+    Math.sin(s.dec) * Math.cos(m.dec) - Math.cos(s.dec) * Math.sin(m.dec) * Math.cos(s.ra - m.ra),
+  );
+  return 0.5 + (0.5 * inc * (angle < 0 ? -1 : 1)) / Math.PI;
+}
+
+export interface SunEvent { kind: 'sunrise' | 'sunset'; ms: number }
+
+/** Sunrise / sunset moments between two times (sun centre crossing -0.833°). */
+export function sunEvents(fromMs: number, toMs: number, lat: number, lon: number): SunEvent[] {
+  const h0 = -0.833 * RAD;
+  const f = (ms: number) => sunPosition(ms, lat, lon).elevation - h0;
+  const out: SunEvent[] = [];
+  const step = 5 * 60_000;
+  let prevT = fromMs, prevV = f(fromMs);
+  for (let t = fromMs + step; t <= toMs + step; t += step) {
+    const v = f(t);
+    if (Math.sign(v) !== Math.sign(prevV)) {
+      let a = prevT, b = t;
+      for (let k = 0; k < 20; k++) {
+        const m = (a + b) / 2;
+        if (Math.sign(f(m)) === Math.sign(prevV)) a = m; else b = m;
+      }
+      out.push({ kind: v > 0 ? 'sunrise' : 'sunset', ms: (a + b) / 2 });
+    }
+    prevT = t; prevV = v;
+  }
+  return out;
 }

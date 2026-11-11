@@ -4,9 +4,11 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 
 - **3D diorama** — real terrain (free AWS Terrain Tiles) rendered at 320×180 and quantised to a 32-colour palette, camera follows a chibi hiker along the track.
 - **2D map** — top-down retro topo map with contour lines.
-- **Checkpoints** — summit, other peaks (by prominence), long rests (12+ min, tent + zZz) and finish are detected automatically; rename or toggle them. The hiker cheers, flags rise, confetti pops.
-- **Data HUD** — distance, elevation, real clock time with sun/moon, pulsing heart rate, elevation profile, minimap.
-- **Real sky** — the sun position is computed from your GPS + timestamps, so night starts get stars and a headlamp.
+- **Activities** — *Hike*, *Camp hike* (stops of 2 h+ become campsites; the clock time-lapses through the night while you sleep in the tent) and *Trail run* (runner sprite, aid-station checkpoints, race timer + moving pace, FINISHER card). Guessed from the file, switchable.
+- **Checkpoints** — summit, other peaks (by prominence), rests, campsites, aid stations, viewpoints and finish. Auto-detected; rename, change type, delete, or add your own at the current scrub position.
+- **Characters** — Hiker, Runner, Dog or Cat, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
+- **Day & night** — sun and moon positions (and the real moon phase) are computed from your GPS + timestamps: sky colours, stars, a head-lamp at night, a little sun/moon dial, and SUNRISE / SUNSET pop-ups.
+- **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).
 
 ## Run
@@ -16,35 +18,43 @@ npm install
 npm run dev
 ```
 
-Open the printed URL and drop a GPX file. From Suunto: activity → ··· → **Export GPX workout**
-(GPX workout has timestamps + heart rate; "GPX route"/"KML route" only have the shape, so timing is faked at 4 km/h).
+Open the printed URL and drop a **GPX** or **FIT** file. From Suunto: activity → ··· → **Export GPX workout** or **Export as FIT file**.
 
-For development, put a track at `public/samples/hike.gpx` (git-ignored) and open `/?sample`.
+- *GPX workout*: positions, elevation, timestamps, heart rate.
+- *FIT*: all of that plus temperature and the watch's own totals (ascent, distance, calories), so the numbers match the Suunto app.
+- *GPX route / KML route*: shape only; timing is faked at 4 km/h.
+
+The default video length grows with distance (30 s + 0.75 s per km, max 90 s); the panel shows how much faster than real life the walking plays.
+
+For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-ignored) and open `/?sample` or `/?sample=fit`.
 
 ## How it works
 
 | File | What it does |
 |---|---|
-| `src/gpx.ts` | Parse GPX (lat/lon/ele/time + Garmin `TrackPointExtension` heart rate) |
-| `src/track.ts` | Resample to even distance steps, smoothing, stats, stop + peak detection |
-| `src/timeline.ts` | Maps video seconds → distance; intro/outro, pauses at checkpoints, slower on steep/slow parts |
+| `src/gpx.ts`, `src/fit.ts` | Parse GPX (Garmin `TrackPointExtension` heart rate) and FIT (`@garmin/fitsdk`, records + session totals) |
+| `src/track.ts` | Resample to even distance steps, smoothing, grade, moving pace, stats, stops, activity guess, checkpoint detection |
+| `src/timeline.ts` | Maps video seconds → distance + clock; intro/outro, pauses (time-lapsed stays), slower on steep/slow parts |
+| `src/sky.ts` | Sun & moon position, moon phase, sunrise/sunset search, sky colour ramps |
+| `src/characters.ts` | The sprite standard, code-drawn Hiker/Runner/Dog/Cat, PNG sheet loader |
 | `src/dem.ts` | Fetches Terrarium elevation tiles and samples them |
 | `src/terrain.ts` | Height grid → mesh, diorama soil skirt, instanced trees, toon + headlamp shader |
 | `src/renderer.ts` | Camera rig (look-ahead follow cam that lifts over ridges), trail lines, low-res render + palette/dither post pass |
 | `src/overlay.ts` | Pixel-perfect sprites (hiker, flags, tents, confetti) and HUD, drawn on a 2D canvas |
-| `src/sprites.ts`, `src/font.ts` | Hand-made sprites and a 5×7 bitmap font |
+| `src/sprites.ts`, `src/font.ts` | Props/HUD icons (flags, tent, campfire, aid station, moon phase) and a 5×7 bitmap font |
 | `src/export.ts` | Deterministic frame-by-frame render → WebCodecs H.264 → MP4 (mp4-muxer) |
 
-## Swapping in your own art (Grok Imagine + unfake.js)
+## Your own characters (Grok Imagine + unfake.js)
 
-Sprites are char-maps in `src/sprites.ts`, coloured from the shared palette in `src/palette.ts`.
-To use AI art: generate a 16×16-ish character in Grok Imagine, clean it with
-[unfake.js](https://github.com/jenissimo/unfake.js) using a **fixed palette** (the 32 colours in `palette.ts`)
-and a manual scale, then load the PNG instead of the char-map.
+See **[docs/SPRITE_SPEC.md](docs/SPRITE_SPEC.md)**: 16×16 frames facing right, a 64×128 sheet with 8 animation rows,
+the 32-colour palette (`docs/palette.hex` / `.json`), prompt templates and unfake.js settings.
+In the app: **Template PNG** downloads the current character's sheet to paint over; **Use my sprite sheet…** loads yours.
 
 ## Scripts
 
 - `node scripts/shot.mjs <outdir> <3d|2d> <landscape|portrait> t1 t2 …` — screenshots at given video times (needs `npm run dev` on port 5199).
-- `node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale]` — full export in headless Chrome.
+- `node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale] [seconds]` — export in headless Chrome (use `BASE=` a `vite preview` URL so hot-reload can't interrupt it).
+- `node scripts/sheets.mjs` — regenerate `docs/sprites/*.png` from the built-in characters.
+- `node scripts/gpx-to-fit.mjs in.gpx out.fit` — make a FIT test file from a GPX (adds synthetic temperature/totals; test data only).
 
 Elevation data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen; SRTM, GMTED, NED, ETOPO1 and others).

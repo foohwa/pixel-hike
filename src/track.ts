@@ -1,6 +1,24 @@
-import type { RawPoint } from './gpx';
+import type { ParsedTrack } from './gpx';
 
-export type CheckpointKind = 'start' | 'summit' | 'peak' | 'rest' | 'finish';
+export type CheckpointKind = 'start' | 'summit' | 'peak' | 'view' | 'rest' | 'camp' | 'cp' | 'finish';
+export type Activity = 'hike' | 'camphike' | 'trailrun';
+
+export const ACTIVITY_LABEL: Record<Activity, string> = {
+  hike: 'Hike',
+  camphike: 'Camp hike',
+  trailrun: 'Trail run',
+};
+
+export const KIND_LABEL: Record<CheckpointKind, string> = {
+  start: 'Start',
+  summit: 'Summit',
+  peak: 'Peak',
+  view: 'Viewpoint',
+  rest: 'Rest',
+  camp: 'Campsite',
+  cp: 'Checkpoint / aid',
+  finish: 'Finish',
+};
 
 export interface Checkpoint {
   id: string;
@@ -8,9 +26,17 @@ export interface Checkpoint {
   d: number; // metres along the track
   name: string;
   ele: number;
-  time: number; // epoch ms
+  time: number; // epoch ms when reached
+  leaveTime: number; // epoch ms when left (== time if no stop)
   enabled: boolean;
-  restMin?: number;
+  stayMin?: number;
+}
+
+export interface Stop {
+  d: number;
+  duration: number;
+  time: number;
+  endTime: number;
 }
 
 export interface TrackStats {
@@ -23,6 +49,8 @@ export interface TrackStats {
   minEle: number;
   avgHr: number | null;
   maxHr: number | null;
+  calories: number | null;
+  avgTemp: number | null;
   startTime: number;
   endTime: number;
 }
@@ -37,6 +65,9 @@ export interface Track {
   ele: Float64Array; // watch elevation, smoothed
   time: Float64Array;
   hr: Float32Array; // NaN when missing
+  temp: Float32Array; // NaN when missing
+  grade: Float32Array; // rise/run, smoothed
+  pace: Float32Array; // moving pace, seconds per (display) km, stops excluded
   hdx: Float32Array; // smoothed heading (unit vector)
   hdz: Float32Array;
   cost: Float64Array; // cumulative playback weight, 0..1
@@ -47,6 +78,12 @@ export interface Track {
   hasTime: boolean;
   hasHr: boolean;
   hasEle: boolean;
+  hasTemp: boolean;
+  /** Multiply local distances by this for display (matches the watch's own total when known). */
+  distScale: number;
+  maxIdx: number;
+  stops: Stop[];
+  sport?: string;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   stats: TrackStats;
   checkpoints: Checkpoint[];
@@ -56,7 +93,9 @@ export function toLatLon(t: Pick<Track, 'lat0' | 'lon0' | 'mLat' | 'mLon'>, x: n
   return { lat: t.lat0 - z / t.mLat, lon: t.lon0 + x / t.mLon };
 }
 
-export function buildTrack(raw: RawPoint[]): Track {
+export function buildTrack(parsed: ParsedTrack): Track {
+  const raw = parsed.points;
+  const session = parsed.session;
   if (raw.length < 2) throw new Error('The track needs at least 2 points.');
 
   // --- local projection around the bbox centre ---
@@ -85,6 +124,7 @@ export function buildTrack(raw: RawPoint[]): Track {
   const hasTime = raw.filter((p) => p.time != null).length > N * 0.5;
   const hasEle = raw.filter((p) => p.ele != null).length > N * 0.5;
   const hasHr = raw.filter((p) => p.hr != null).length > N * 0.5;
+  const hasTemp = raw.filter((p) => p.temp != null).length > N * 0.5;
 
   const rt = fillSeries(raw.map((p) => p.time));
   if (!hasTime) {
@@ -95,12 +135,13 @@ export function buildTrack(raw: RawPoint[]): Track {
   }
   const re = hasEle ? fillSeries(raw.map((p) => p.ele)) : new Float64Array(N);
   const rh = hasHr ? fillSeries(raw.map((p) => p.hr)) : new Float64Array(N).fill(NaN);
+  const rT = hasTemp ? fillSeries(raw.map((p) => p.temp ?? null)) : new Float64Array(N).fill(NaN);
 
   // --- resample at even distance steps ---
   const step = clamp(total / 8000, 3, 25);
   const n = Math.ceil(total / step) + 1;
   const d = new Float64Array(n), x = new Float64Array(n), z = new Float64Array(n);
-  const ele = new Float64Array(n), time = new Float64Array(n), hr = new Float32Array(n);
+  const ele = new Float64Array(n), time = new Float64Array(n), hr = new Float32Array(n), temp = new Float32Array(n);
   let j = 0;
   for (let k = 0; k < n; k++) {
     const target = Math.min(k * step, total);
@@ -113,11 +154,20 @@ export function buildTrack(raw: RawPoint[]): Track {
     ele[k] = lerp(re[j], re[j + 1], f);
     time[k] = lerp(rt[j], rt[j + 1], f);
     hr[k] = lerp(rh[j], rh[j + 1], f);
+    temp[k] = lerp(rT[j], rT[j + 1], f);
   }
 
   const xs = gaussian(x, Math.max(1, 10 / step));
   const zs = gaussian(z, Math.max(1, 10 / step));
   const eleS = gaussian(ele, 40 / step);
+  const grade = new Float32Array(n);
+  {
+    const w = Math.max(1, Math.round(40 / step));
+    for (let i = 0; i < n; i++) {
+      const a = Math.max(0, i - w), b = Math.min(n - 1, i + w);
+      grade[i] = d[b] > d[a] ? (eleS[b] - eleS[a]) / (d[b] - d[a]) : 0;
+    }
+  }
 
   // --- heading (heavily smoothed so the camera doesn't wobble) ---
   const hdx = new Float32Array(n), hdz = new Float32Array(n);
@@ -160,22 +210,28 @@ export function buildTrack(raw: RawPoint[]): Track {
   const duration = rt[N - 1] - rt[0];
   const stopped = stops.reduce((s, st) => s + st.duration, 0);
 
+  let tSum = 0, tN = 0;
+  if (hasTemp) for (const v of rT) if (Number.isFinite(v)) { tSum += v; tN++; }
   const stats: TrackStats = {
     distance: total,
     duration,
     movingTime: Math.max(0, duration - stopped),
-    ascent,
-    descent,
+    // prefer the watch's own totals (barometric, its smoothing) when the file has them
+    ascent: session?.ascent ?? ascent,
+    descent: session?.descent ?? descent,
     maxEle,
     minEle,
-    avgHr: hrN ? hrSum / hrN : null,
-    maxHr: hrN ? hrMax : null,
+    avgHr: session?.avgHr ?? (hrN ? hrSum / hrN : null),
+    maxHr: session?.maxHr ?? (hrN ? hrMax : null),
+    calories: session?.calories ?? null,
+    avgTemp: session?.avgTemp ?? (tN ? tSum / tN : null),
     startTime: rt[0],
     endTime: rt[N - 1],
   };
 
   // --- playback cost: mix of distance and (stop-capped) moving time, so steep climbs play slower ---
   const cost = new Float64Array(n);
+  const pace = new Float32Array(n);
   {
     const dts: number[] = [];
     for (let i = 0; i < n - 1; i++) dts.push(Math.max(0, time[i + 1] - time[i]));
@@ -190,6 +246,12 @@ export function buildTrack(raw: RawPoint[]): Track {
     }
     const last = cost[n - 1] || 1;
     for (let i = 0; i < n; i++) cost[i] /= last;
+    // moving pace: stop-capped seconds per metre, smoothed over ~500 m
+    const spm = new Float64Array(n);
+    for (let i = 0; i < n - 1; i++) spm[i] = capped[i] / 1000 / Math.max(1e-6, d[i + 1] - d[i]);
+    spm[n - 1] = spm[n - 2] ?? 0;
+    const sm = gaussian(spm, 250 / step);
+    for (let i = 0; i < n; i++) pace[i] = sm[i] * 1000;
   }
 
   // --- bounds ---
@@ -199,20 +261,27 @@ export function buildTrack(raw: RawPoint[]): Track {
     minZ = Math.min(minZ, zs[i]); maxZ = Math.max(maxZ, zs[i]);
   }
 
-  const track: Track = {
-    n, step, d, x: xs, z: zs, ele: eleS, time, hr, hdx, hdz, cost,
-    lat0, lon0, mLat, mLon, hasTime, hasHr, hasEle,
+  const distScale = session?.distance && Math.abs(session.distance / total - 1) < 0.15 ? session.distance / total : 1;
+
+  return {
+    n, step, d, x: xs, z: zs, ele: eleS, time, hr, temp, grade, pace, hdx, hdz, cost,
+    lat0, lon0, mLat, mLon, hasTime, hasHr, hasEle, hasTemp, distScale, maxIdx, stops,
+    sport: parsed.sport,
     bounds: { minX, maxX, minZ, maxZ },
     stats,
     checkpoints: [],
   };
-  track.checkpoints = detectCheckpoints(track, maxIdx, stops);
-  return track;
+}
+
+/** Best guess of the activity type from the file's sport and the shape of the data. */
+export function guessActivity(t: Track): Activity {
+  const s = t.sport ?? '';
+  if (/run/.test(s)) return 'trailrun';
+  if (t.stops.some((st) => st.duration >= 3 * 3600_000) || t.stats.duration > 30 * 3600_000) return 'camphike';
+  return 'hike';
 }
 
 // ---------------------------------------------------------------------------
-
-interface Stop { d: number; duration: number; time: number }
 
 function findStops(rx: Float64Array, rz: Float64Array, rt: Float64Array, rd: Float64Array, radius: number, minMs: number): Stop[] {
   const out: Stop[] = [];
@@ -223,24 +292,25 @@ function findStops(rx: Float64Array, rz: Float64Array, rt: Float64Array, rd: Flo
     while (j + 1 < N && Math.hypot(rx[j + 1] - rx[i], rz[j + 1] - rz[i]) < radius) j++;
     const dur = rt[j] - rt[i];
     if (dur >= minMs) {
-      out.push({ d: rd[i], duration: dur, time: rt[i] });
+      out.push({ d: rd[i], duration: dur, time: rt[i], endTime: rt[j] });
       i = j + 1;
     } else i++;
   }
   return out;
 }
 
-function detectCheckpoints(t: Track, maxIdx: number, stops: Stop[]): Checkpoint[] {
+/** Auto checkpoints for an activity: start, summit, other peaks, rests / camps / aid stations, finish. */
+export function detectCheckpoints(t: Track, activity: Activity): Checkpoint[] {
   const { n, d, ele, time, stats } = t;
-  const at = (i: number) => ({ d: d[i], ele: ele[i], time: time[i] });
+  const at = (i: number) => ({ d: d[i], ele: ele[i], time: time[i], leaveTime: time[i] });
+  const idxOf = (dist: number) => Math.min(n - 1, Math.round(dist / t.step));
   const cps: Checkpoint[] = [];
 
   cps.push({ id: 'start', kind: 'start', name: 'START', enabled: true, ...at(0) });
 
   const range = stats.maxEle - stats.minEle;
-  const hasClimb = t.hasEle && range > 30;
-  if (hasClimb) {
-    cps.push({ id: 'summit', kind: 'summit', name: 'SUMMIT', enabled: true, ...at(maxIdx) });
+  if (t.hasEle && range > 30) {
+    cps.push({ id: 'summit', kind: 'summit', name: 'SUMMIT', enabled: true, ...at(t.maxIdx) });
 
     // Other peaks by topographic prominence along the profile.
     const minProm = Math.max(60, range * 0.06);
@@ -251,7 +321,7 @@ function detectCheckpoints(t: Track, maxIdx: number, stops: Stop[]): Checkpoint[
       for (let k = Math.max(0, i - w); k <= Math.min(n - 1, i + w); k++) {
         if (ele[k] > ele[i]) { isMax = false; break; }
       }
-      if (!isMax || i === maxIdx) continue;
+      if (!isMax || i === t.maxIdx) continue;
       let lMin = ele[i], rMin = ele[i];
       for (let k = i - 1; k >= 0 && ele[k] <= ele[i]; k--) lMin = Math.min(lMin, ele[k]);
       for (let k = i + 1; k < n && ele[k] <= ele[i]; k++) rMin = Math.min(rMin, ele[k]);
@@ -261,11 +331,12 @@ function detectCheckpoints(t: Track, maxIdx: number, stops: Stop[]): Checkpoint[
     cands.sort((a, b) => b.prom - a.prom);
     const minSep = Math.max(800, stats.distance * 0.03);
     const chosen: number[] = [];
+    const maxPeaks = activity === 'trailrun' ? 3 : 5;
     for (const c of cands) {
-      if (chosen.length >= 5) break;
+      if (chosen.length >= maxPeaks) break;
       const dc = d[c.i];
       if (dc < 500 || stats.distance - dc < 500) continue;
-      if (Math.abs(dc - d[maxIdx]) < minSep) continue;
+      if (Math.abs(dc - d[t.maxIdx]) < minSep) continue;
       if (chosen.some((ci) => Math.abs(d[ci] - dc) < minSep)) continue;
       chosen.push(c.i);
     }
@@ -275,17 +346,48 @@ function detectCheckpoints(t: Track, maxIdx: number, stops: Stop[]): Checkpoint[
     });
   }
 
-  // Long rests (12+ min), the 4 longest, away from start/finish/peaks.
-  const rests = stops
-    .filter((s) => s.duration >= 12 * 60_000 && s.d > 300 && stats.distance - s.d > 300)
-    .sort((a, b) => b.duration - a.duration)
-    .slice(0, 4)
-    .filter((s) => !cps.some((c) => Math.abs(c.d - s.d) < 300));
-  rests.forEach((s, k) => {
-    const i = Math.min(n - 1, Math.round(s.d / t.step));
-    const min = Math.round(s.duration / 60_000);
-    cps.push({ id: `rest${k}`, kind: 'rest', name: 'REST', enabled: true, restMin: min, ...at(i), time: s.time });
+  const inner = t.stops.filter((s) => s.d > 300 && stats.distance - s.d > 300);
+  const fromStop = (s: Stop, kind: CheckpointKind, id: string, name: string): Checkpoint => ({
+    id, kind, name, enabled: true,
+    d: s.d, ele: ele[idxOf(s.d)], time: s.time, leaveTime: s.endTime,
+    stayMin: Math.round(s.duration / 60_000),
   });
+  /** Longest stops first, skipping any within `gap` m of a checkpoint already placed. */
+  const pick = (stops: Stop[], max: number, gap = 400) => {
+    const out: Stop[] = [];
+    for (const s of [...stops].sort((a, b) => b.duration - a.duration)) {
+      if (out.length >= max) break;
+      if (cps.some((c) => Math.abs(c.d - s.d) < gap) || out.some((o) => Math.abs(o.d - s.d) < gap)) continue;
+      out.push(s);
+    }
+    return out.sort((a, b) => a.d - b.d);
+  };
+
+  if (activity === 'trailrun') {
+    // Aid stations / checkpoints: the longest stops of a minute or more.
+    pick(inner.filter((s) => s.duration >= 60_000), 10, Math.max(1000, stats.distance * 0.03))
+      .forEach((s, k) => cps.push(fromStop(s, 'cp', `cp${k}`, `CP ${k + 1}`)));
+  } else {
+    if (activity === 'camphike') {
+      inner
+        .filter((s) => s.duration >= 2 * 3600_000)
+        .sort((a, b) => a.d - b.d)
+        .forEach((s, k) => {
+          // a camp replaces a peak flag at the same spot
+          for (let q = cps.length - 1; q >= 0; q--) if (cps[q].kind === 'peak' && Math.abs(cps[q].d - s.d) < 300) cps.splice(q, 1);
+          cps.push(fromStop(s, 'camp', `camp${k}`, `CAMP ${k + 1}`));
+        });
+    }
+    pick(inner.filter((s) => s.duration >= 12 * 60_000 && s.duration < 2 * 3600_000), 4)
+      .forEach((s, k) => cps.push(fromStop(s, 'rest', `rest${k}`, 'REST')));
+  }
+
+  // A stop right at a summit/peak keeps the flag but remembers how long you stayed.
+  for (const c of cps) {
+    if (c.kind !== 'summit' && c.kind !== 'peak') continue;
+    const s = t.stops.find((st) => Math.abs(st.d - c.d) < 150);
+    if (s) { c.leaveTime = s.endTime; c.stayMin = Math.round(s.duration / 60_000); }
+  }
 
   cps.push({ id: 'finish', kind: 'finish', name: 'FINISH', enabled: true, ...at(n - 1) });
   return cps.sort((a, b) => a.d - b.d);
