@@ -27,3 +27,6 @@ dist-ssr
 public/samples/
 *.gpx
 *.fit
+
+# checkpoint edits mirrored by the dev server (personal names/notes)
+edits/

@@ -76,3 +76,30 @@ export function pin(cp: Checkpoint) {
   cp.pinned = true;
   cp.id = `pin-${Math.round(cp.d)}-${Date.now().toString(36)}${(pinSeq++).toString(36)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Backup file: the same saved state as JSON, so edits survive cleared browser data,
+// another browser, or a big app update.
+
+export interface Backup extends Omit<SavedState, 'v'> {
+  app: 'pixel-hike';
+  v: 1;
+  key: string;
+  track: { startTime: number; distance: number };
+}
+
+export function makeBackup(t: Track, s: Omit<SavedState, 'v' | 'savedAt'>): Backup {
+  return {
+    app: 'pixel-hike', v: 1, key: trackKey(t), savedAt: Date.now(),
+    track: { startTime: t.stats.startTime, distance: Math.round(t.stats.distance) },
+    ...s,
+  };
+}
+
+export function parseBackup(text: string): Backup {
+  const b = JSON.parse(text) as Partial<Backup>;
+  if (b.app !== 'pixel-hike' || b.v !== 1 || !Array.isArray(b.pins) || !b.settings) {
+    throw new Error('That is not a Pixel Hike edits backup.');
+  }
+  return { tombstones: [], ...b } as Backup;
+}

@@ -9,7 +9,7 @@ const browser = await chromium.launch({ channel: 'chrome', args: ['--use-angle=s
 const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
 page.on('console', (m) => { if (m.type() === 'error') console.log('[console]', m.text()); });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-await page.goto(`${base}/?sample=${process.env.SAMPLE ?? 'gpx'}`);
+await page.goto(`${base}/?sample=${process.env.SAMPLE ?? 'gpx'}&nodisk`);
 await page.waitForFunction(() => window.__pixelHike && window.__pixelHike.duration > 0, null, { timeout: 120000 });
 const info = await page.evaluate(({ mode, aspect, setup }) => {
   const h = window.__pixelHike;

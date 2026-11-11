@@ -7,7 +7,7 @@ import { parseFit } from './fit';
 import { parseGpx, type ParsedTrack } from './gpx';
 import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
-import { forget, loadSaved, mergeCheckpoints, pin, save } from './store';
+import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
 import { buildTerrain, terrainExtent, type Terrain } from './terrain';
 import { defaultDuration, Timeline } from './timeline';
 import {
@@ -44,6 +44,8 @@ const ui = {
   saved: $('saved'),
   addCp: $<HTMLButtonElement>('addCp'),
   resetCps: $<HTMLButtonElement>('resetCps'),
+  backupCps: $<HTMLButtonElement>('backupCps'),
+  restoreCps: $<HTMLInputElement>('restoreCps'),
   quality: $<HTMLSelectElement>('quality'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
@@ -127,7 +129,8 @@ async function loadParsed(parsed: ParsedTrack) {
   let pins: Checkpoint[] = [];
 
   // …then whatever was saved for it last time
-  const saved = loadSaved(track);
+  // browser storage first; if it was cleared, fall back to the copy on disk (dev server)
+  const saved = loadSaved(track) ?? (await loadFromDisk(track));
   state.restoring = !!saved; // don't auto-switch hiker/runner or save half-restored state
   if (saved) {
     applySettings(saved.settings);
@@ -142,7 +145,7 @@ async function loadParsed(parsed: ParsedTrack) {
   rebuild();
   state.t = 0;
   state.playing = true;
-  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps].forEach((el) => (el.disabled = false));
+  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps].forEach((el) => (el.disabled = false));
   ui.play.innerHTML = '&#9208;';
   justRestored = !!saved;
   setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
@@ -214,16 +217,35 @@ function persist() {
   clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
     if (!state.track) return;
-    const ok = save(state.track, {
-      settings: collectSettings(),
-      pins: state.checkpoints.filter((c) => c.pinned),
-      tombstones: state.tombstones,
-    });
+    const ok = save(state.track, currentSaveState());
+    mirrorToDisk(state.track);
     const edits = state.checkpoints.filter((c) => c.pinned).length + state.tombstones.length;
     const verb = justRestored ? 'restored' : 'saved';
     justRestored = false;
     showSaved(ok ? (edits ? `✓ ${verb} · ${edits} edit${edits > 1 ? 's' : ''}` : `✓ ${verb}`) : 'not saved (storage full?)');
   }, 250);
+}
+
+/** Dev server only: also keep a copy in edits/<key>.json next to the project. */
+const diskEnabled = () => import.meta.env.DEV && !new URLSearchParams(location.search).has('nodisk'); // tests pass ?nodisk
+
+function mirrorToDisk(t: Track) {
+  if (!diskEnabled()) return;
+  fetch(`/__pixelhike/edits/${encodeURIComponent(trackKey(t))}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(makeBackup(t, currentSaveState()), null, 2),
+  }).catch(() => { /* not running under the dev server */ });
+}
+
+async function loadFromDisk(t: Track) {
+  if (!diskEnabled()) return null;
+  try {
+    const r = await fetch(`/__pixelhike/edits/${encodeURIComponent(trackKey(t))}`);
+    return r.ok ? parseBackup(await r.text()) : null;
+  } catch {
+    return null;
+  }
 }
 
 function showSaved(text: string) {
@@ -590,6 +612,49 @@ ui.addCp.onclick = () => {
   renderCheckpointList();
   rebuild();
 };
+function currentSaveState() {
+  return {
+    settings: collectSettings(),
+    pins: state.checkpoints.filter((c) => c.pinned),
+    tombstones: state.tombstones,
+  };
+}
+
+ui.backupCps.onclick = () => {
+  if (!state.track) return;
+  const b = makeBackup(state.track, currentSaveState());
+  const date = new Date(state.track.stats.startTime).toISOString().slice(0, 10);
+  const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-${date}-edits.json`;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(b, null, 2)], { type: 'application/json' }));
+  download(url, name);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  showSaved(`✓ backed up · ${b.pins.length + b.tombstones.length} edits`);
+};
+
+ui.restoreCps.onchange = async () => {
+  const f = ui.restoreCps.files?.[0];
+  ui.restoreCps.value = '';
+  if (!f || !state.track) return;
+  try {
+    const b = parseBackup(await f.text());
+    if (b.key !== trackKey(state.track) &&
+        !confirm(`This backup was made for a different track (${new Date(b.track.startTime).toLocaleString()}). Apply it anyway?`)) return;
+    state.restoring = true;
+    applySettings(b.settings);
+    state.tombstones = b.tombstones ?? [];
+    state.checkpoints = b.pins.map((p) => ({ ...p, pinned: true }));
+    setActivity((b.settings.activity as Activity) ?? state.activity, false);
+    state.restoring = false;
+    justRestored = true;
+    rebuild();
+    void updateSoundtrack().then(syncAudio);
+  } catch (e) {
+    state.restoring = false;
+    setStatus((e as Error).message || 'Could not read that backup.', true);
+    setTimeout(() => setStatus(''), 3000);
+  }
+};
+
 ui.resetCps.onclick = () => {
   if (!state.track || !confirm('Forget all checkpoint edits for this track?')) return;
   state.tombstones = [];

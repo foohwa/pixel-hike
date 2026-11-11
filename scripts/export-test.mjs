@@ -6,7 +6,7 @@ const base = process.env.BASE ?? 'http://localhost:5199';
 const browser = await chromium.launch({ channel: 'chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-await page.goto(`${base}/?sample`);
+await page.goto(`${base}/?sample&nodisk`);
 await page.waitForFunction(() => window.__pixelHike && window.__pixelHike.duration > 0, null, { timeout: 120000 });
 const t0 = Date.now();
 const b64 = await page.evaluate(async ({ mode, aspect, scale, dur }) => {

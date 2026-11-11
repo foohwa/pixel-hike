@@ -10,7 +10,7 @@ const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) process.exitCode = 1; };
 const load = async () => {
-  await page.goto(`${base}/?sample`);
+  await page.goto(`${base}/?sample&nodisk`);
   await page.waitForFunction(() => window.__pixelHike && window.__pixelHike.duration > 0, null, { timeout: 120000 });
   await page.waitForTimeout(400);
 };
@@ -74,6 +74,24 @@ const b64 = await page.evaluate(async () => {
 });
 writeFileSync(`${out}/e2e-clip.mp4`, Buffer.from(b64, 'base64'));
 console.log(`wrote ${out}/e2e-clip.mp4`);
+
+// 6. backup → wipe browser storage → reload → restore from the file
+const dl = page.waitForEvent('download');
+await page.click('#backupCps');
+const backupPath = `${out}/e2e-edits-backup.json`;
+await (await dl).saveAs(backupPath);
+await page.evaluate(() => window.__pixelHike.forgetSaved());
+await load();
+const wiped = await names();
+ok(!wiped.includes('WATERFALL'), `storage wiped → edits gone (${wiped.join(', ')})`);
+await page.setInputFiles('#restoreCps', backupPath);
+await page.waitForTimeout(800);
+const back = await names();
+console.log('after restore:', back.join(', '));
+ok(back.includes('WATERFALL') && !back.includes('PEAK 2') && back.includes('VIEWPOINT'), 'edits restored from the backup file');
+ok(await page.$eval('#activity button.on', (b) => b.dataset.v) === 'trailrun', 'settings restored from the backup file');
+await load();
+ok((await names()).includes('WATERFALL'), 'restored edits are saved again (survive another reload)');
 
 // clean up the saved state so the next run starts fresh
 await page.evaluate(() => window.__pixelHike.forgetSaved());
