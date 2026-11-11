@@ -12,7 +12,8 @@ import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
 import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
-import type { Dem } from './dem';
+import type { BBox, Dem } from './dem';
+import { loadWater, type WaterData } from './water';
 import { defaultDuration, Timeline } from './timeline';
 import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
@@ -44,6 +45,7 @@ const ui = {
   envSigns: $<HTMLInputElement>('envSigns'),
   envSplits: $<HTMLInputElement>('envSplits'),
   envLight: $<HTMLInputElement>('envLight'),
+  envWater: $<HTMLInputElement>('envWater'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
   zoneRows: $('zoneRows'),
   zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
@@ -100,6 +102,9 @@ const state = {
   track: null as Track | null,
   terrain: null as Terrain | null,
   dem: null as Dem | null,
+  bbox: null as BBox | null,
+  water: null as WaterData | null,
+  waterLoad: null as Promise<void> | null,
   checkpoints: [] as Checkpoint[],
   tombstones: [] as number[],
   timeline: null as Timeline | null,
@@ -143,6 +148,9 @@ async function loadParsed(parsed: ParsedTrack) {
   const pad = 300;
   const a = toLatLon(track, ext.x0 - pad, ext.z0 - pad);
   const b = toLatLon(track, ext.x0 + ext.W + pad, ext.z0 + ext.D + pad);
+  state.bbox = { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) };
+  state.water = null;
+  state.waterLoad = null;
   const dem = await loadDem(
     { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) },
     (done, total) => setStatus(`Loading terrain… ${done}/${total}`),
@@ -193,6 +201,7 @@ async function loadParsed(parsed: ParsedTrack) {
   setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
   if (!dem) setTimeout(() => setStatus(''), 3000);
   void updateSoundtrack().then(syncAudio);
+  void ensureWater();
 }
 
 function heroSet(): SpriteSet {
@@ -278,6 +287,7 @@ function rebuild() {
       : null,
     gate,
     zones: state.zones,
+    water: state.water,
     env: {
       scenery,
       clouds: ui.envClouds.checked,
@@ -285,6 +295,7 @@ function rebuild() {
       signs: ui.envSigns.checked,
       splits: ui.envSplits.checked,
       light: ui.envLight.checked,
+      water: ui.envWater.checked,
     },
   });
   state.t = Math.min(state.t, state.timeline.duration);
@@ -500,6 +511,7 @@ function collectSettings() {
     envSigns: ui.envSigns.checked,
     envSplits: ui.envSplits.checked,
     envLight: ui.envLight.checked,
+    envWater: ui.envWater.checked,
     zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
@@ -534,7 +546,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
   if (s.scenery === 'auto' || s.scenery === 'tropical' || s.scenery === 'alpine' || s.scenery === 'classic') ui.scenery.value = s.scenery;
-  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight]] as const) {
+  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight], ['envWater', ui.envWater]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
@@ -880,6 +892,26 @@ for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () =>
 ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
 for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits, ui.envLight]) el.onchange = () => rebuild();
+ui.envWater.onchange = () => { rebuild(); if (ui.envWater.checked) void ensureWater(); };
+
+/** Download the map area's rivers + lakes once (cached per area in the browser). */
+function ensureWater(): Promise<void> {
+  if (!state.bbox || !ui.envWater.checked) return Promise.resolve();
+  if (state.water) return Promise.resolve();
+  if (state.waterLoad) return state.waterLoad;
+  const track = state.track;
+  state.waterLoad = loadWater(state.bbox)
+    .then((w) => {
+      if (state.track !== track) return; // another file was loaded meanwhile
+      state.water = w;
+      rebuild();
+    })
+    .catch((e) => {
+      console.warn('Rivers unavailable (OpenStreetMap / Overpass)', e);
+      state.waterLoad = null;
+    });
+  return state.waterLoad;
+}
 for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
 ui.zoneReset.onclick = () => {
   if (!state.track) return;
@@ -1007,6 +1039,12 @@ ui.export.onclick = async () => {
   if (!state.timeline) return;
   if (state.exporting) { exportAbort?.abort(); return; }
   await updateSoundtrack();
+  // rivers are still downloading? give them a moment so the video includes them
+  if (ui.envWater.checked && !state.water && state.waterLoad) {
+    setStatus('Fetching rivers…');
+    await Promise.race([state.waterLoad, new Promise((r) => setTimeout(r, 20_000))]);
+    setStatus('');
+  }
   state.exporting = true;
   syncAudio();
   exportAbort = new AbortController();
@@ -1099,6 +1137,7 @@ Object.assign(window, {
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
     },
+    waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length }); },
     async setLogoFromUrl(url: string, colors: LogoColors = 'logo') {
       ui.logoColors.value = colors;
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
@@ -1106,6 +1145,7 @@ Object.assign(window, {
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
     setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean; light?: boolean }) {
       if (e.light != null) ui.envLight.checked = e.light;
+      if ((e as { water?: boolean }).water != null) ui.envWater.checked = !!(e as { water?: boolean }).water;
       if (e.scenery) ui.scenery.value = e.scenery;
       if (e.clouds != null) ui.envClouds.checked = e.clouds;
       if (e.life != null) ui.envLife.checked = e.life;

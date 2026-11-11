@@ -117,6 +117,10 @@ export interface Terrain {
   scenery: Scenery;
   /** Mist layer controls: uMist strength 0..1, uMistClear = radius kept clear around the hiker. */
   mist: { uMist: { value: number }; uMistClear: { value: number } };
+  /** Instanced tree meshes (so rivers can clear their banks). */
+  trees: THREE.InstancedMesh[];
+  /** Local x/z extent of the diorama. */
+  bounds: { x0: number; z0: number; x1: number; z1: number };
   shadowMap: { tex: THREE.Texture; origin: THREE.Vector2; size: THREE.Vector2; maxY: number; step: number };
   /** Surface height in metres (not exaggerated) at local x/z. */
   heightAt(x: number, z: number): number;
@@ -325,6 +329,8 @@ export function buildTerrain(track: Track, dem: Dem | null, scenery: Scenery = '
     group,
     scenery,
     mist,
+    trees: trees as THREE.InstancedMesh[],
+    bounds: { x0, z0, x1: x0 + (nx - 1) * spacing, z1: z0 + (nz - 1) * spacing },
     shadowMap,
     heightAt,
     worldY,
@@ -342,6 +348,23 @@ export function buildTerrain(track: Track, dem: Dem | null, scenery: Scenery = '
       hmap.dispose();
     },
   };
+}
+
+/** Flat-shaded, sun/moon/fog-lit material in one palette colour (lakes etc.). */
+export function litMaterial(hex: string) {
+  return new THREE.ShaderMaterial({
+    uniforms: { ...shared, uCol: { value: v3(hex) } },
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }
+    `,
+    fragmentShader: /* glsl */ `
+      ${LIGHT_GLSL}
+      uniform vec3 uCol;
+      varying vec3 vW;
+      void main() { gl_FragColor = vec4(shade(uCol, vec3(0.0, 1.0, 0.0), vW), 1.0); }
+    `,
+  });
 }
 
 function objectMaterial(vertexColors: boolean) {

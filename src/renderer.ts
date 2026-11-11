@@ -10,6 +10,7 @@ import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent }
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
@@ -36,6 +37,8 @@ export interface SceneData {
   /** Elevation zones + technical stretches used to dress the trail, or null. */
   zones: TrailZones | null;
   env: EnvOptions;
+  /** Rivers / lakes from OpenStreetMap, once loaded (null = none / not yet). */
+  water: WaterData | null;
 }
 
 /** Optional scenery extras (each can be switched off in the sidebar). */
@@ -51,6 +54,8 @@ export interface EnvOptions {
   splits: boolean;
   /** Ridges cast shadows from the real sun; nights lit by the real moon (position + phase). */
   light: boolean;
+  /** Draw rivers + lakes and announce named river crossings. */
+  water: boolean;
 }
 
 interface Rig {
@@ -75,6 +80,7 @@ export class PixelRenderer {
   private data: SceneData | null = null;
   private rig: Rig | null = null;
   private trail: { group: THREE.Group; done: Line2; ghost: Line2; step: number; mats: LineMaterial[] } | null = null;
+  private water: { scene: WaterScene; data: WaterData; terrain: Terrain } | null = null;
 
   mode: ViewMode = '3d';
   aspect: Aspect = 'landscape';
@@ -216,6 +222,7 @@ export class PixelRenderer {
     this.camera.aspect = this.W / this.H;
     this.camera.updateProjectionMatrix();
     this.trail?.mats.forEach((m) => m.resolution.set(this.W, this.H));
+    this.water?.scene.lineMats.forEach((l) => l.mat.resolution.set(this.W, this.H));
   }
 
   setMode(mode: ViewMode) {
@@ -237,6 +244,7 @@ export class PixelRenderer {
       this.sunEvents = sunEvents(data.track.stats.startTime - 1.5 * day, data.track.stats.endTime + 1.5 * day, data.track.lat0, data.track.lon0);
     }
     this.data = data;
+    this.syncWater(data);
     this.toasts = [];
     for (const ev of this.sunEvents) {
       const t = data.timeline.videoTimeAtClock(ev.ms);
@@ -252,9 +260,32 @@ export class PixelRenderer {
         this.toasts.push({ text: ZONE_LABEL[run.style].toUpperCase(), t: Math.max(t, data.timeline.gateIn + data.timeline.intro) });
       }
     }
+    if (data.env.water && this.water) {
+      for (const c of this.water.scene.crossings) {
+        const t = data.timeline.videoTimeAtDistance(c.d);
+        if (t == null) continue;
+        this.toasts.push({ text: c.name.toUpperCase().slice(0, 30), t: Math.max(t, data.timeline.gateIn + data.timeline.intro) });
+      }
+    }
     // one toast at a time: nudge later ones so they don't overlap
     this.toasts.sort((a, b) => a.t - b.t);
     for (let i = 1; i < this.toasts.length; i++) this.toasts[i].t = Math.max(this.toasts[i].t, this.toasts[i - 1].t + 2.4);
+  }
+
+  /** (Re)build the river / lake meshes when the data or the diorama changes. */
+  private syncWater(data: SceneData) {
+    const w = this.water;
+    if (w && (w.data !== data.water || w.terrain !== data.terrain)) {
+      this.scene.remove(w.scene.group);
+      w.scene.dispose();
+      this.water = null;
+    }
+    if (!this.water && data.water) {
+      const scene = buildWater(data.water, data.track, data.terrain, this.W, this.H);
+      this.scene.add(scene.group);
+      this.water = { scene, data: data.water, terrain: data.terrain };
+    }
+    if (this.water) this.water.scene.group.visible = data.env.water;
   }
 
   private dialAt(ms: number): DialState {
@@ -483,6 +514,12 @@ export class PixelRenderer {
     if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
     terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
+    if (this.water) {
+      const dark = sky.lamp > 0.5;
+      for (const l of this.water.scene.lineMats) {
+        l.mat.color.set(l.kind === 'river' ? (dark ? C.dusk : C.sky) : dark ? C.night : C.skyLight);
+      }
+    }
 
     // ---- trail progress
     const tr = this.trail!;
