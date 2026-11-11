@@ -6,7 +6,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **2D map** — top-down retro topo map with contour lines.
 - **Activities** — *Hike*, *Camp hike* (stops of 2 h+ become campsites; the clock time-lapses through the night while you sleep in the tent) and *Trail run* (runner sprite, aid-station checkpoints, race timer + moving pace, FINISHER card). Guessed from the file, switchable.
 - **Checkpoints** — summit, other peaks (by prominence), rests, campsites, aid stations, viewpoints and finish. Auto-detected; rename, change type, delete, or add your own at the current scrub position.
-- **Characters** — Hiker, Runner, Dog or Cat, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
+- **Characters** — Hiker, Runner, Dog or Cat, each male or female, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
 - **Day & night** — sun and moon positions (and the real moon phase) are computed from your GPS + timestamps: sky colours, stars, a head-lamp at night, a little sun/moon dial, and SUNRISE / SUNSET pop-ups.
 - **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).

@@ -1,5 +1,5 @@
 import './style.css';
-import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type SpriteSet } from './characters';
+import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type Gender, type SpriteSet } from './characters';
 import { loadDem } from './dem';
 import { exportMp4 } from './export';
 import { parseFit } from './fit';
@@ -21,6 +21,7 @@ const ui = {
   title: $<HTMLInputElement>('title'),
   activity: $('activity'),
   character: $('character'),
+  gender: $('gender'),
   companion: $<HTMLSelectElement>('companion'),
   charPreview: $<HTMLCanvasElement>('charPreview'),
   sheet: $<HTMLInputElement>('sheet'),
@@ -57,6 +58,7 @@ const state = {
   timeline: null as Timeline | null,
   activity: 'hike' as Activity,
   character: 'hiker' as CharacterId,
+  gender: 'male' as Gender,
   companion: null as CharacterId | null,
   customSheet: null as SpriteSet | null,
   customCount: 0,
@@ -118,7 +120,7 @@ async function loadParsed(parsed: ParsedTrack) {
 }
 
 function heroSet(): SpriteSet {
-  return state.customSheet ?? builtInSet(state.character);
+  return state.customSheet ?? builtInSet(state.character, state.gender);
 }
 
 function rebuild() {
@@ -293,6 +295,7 @@ bindSeg(ui.mode, (v) => renderer.setMode(v as ViewMode));
 bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); });
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
+bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
 ui.companion.onchange = () => { state.companion = (ui.companion.value || null) as CharacterId | null; rebuild(); };
 ui.duration.oninput = () => rebuild();
 ui.title.oninput = () => rebuild();
@@ -303,7 +306,7 @@ ui.sheet.onchange = async () => {
   const f = ui.sheet.files?.[0];
   if (!f) return;
   try {
-    state.customSheet = await loadSheet(f, state.character);
+    state.customSheet = await loadSheet(f, state.character, state.gender);
     ui.resetSheet.hidden = false;
     rebuild();
   } catch (e) {
@@ -314,7 +317,7 @@ ui.sheet.onchange = async () => {
 };
 ui.resetSheet.onclick = () => { state.customSheet = null; ui.resetSheet.hidden = true; rebuild(); };
 ui.template.onclick = () => {
-  download(renderSheet(heroSet(), 8).toDataURL('image/png'), `pixel-hike-${state.character}-sheet-8x.png`);
+  download(renderSheet(heroSet(), 8).toDataURL('image/png'), `pixel-hike-${state.character}-${state.gender}-sheet-8x.png`);
 };
 
 ui.addCp.onclick = () => {
@@ -445,8 +448,9 @@ Object.assign(window, {
     setActivity(a: Activity) { setActivity(a); },
     setCharacter(c: CharacterId) { setCharacter(c); },
     setCompanion(c: CharacterId | null) { state.companion = c; rebuild(); },
+    setGender(g: Gender) { state.gender = g; ui.gender.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === g)); rebuild(); },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
-    sheetDataUrl(c: CharacterId, scale = 1, guides = false) { return renderSheet(builtInSet(c), scale, guides).toDataURL('image/png'); },
+    sheetDataUrl(c: CharacterId, scale = 1, guides = false, g: Gender = 'male') { return renderSheet(builtInSet(c, g), scale, guides).toDataURL('image/png'); },
     get duration() { return state.timeline?.duration ?? 0; },
     get checkpoints() { return state.checkpoints; },
     get timeline() { return state.timeline; },

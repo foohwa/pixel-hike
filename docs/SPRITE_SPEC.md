@@ -4,9 +4,14 @@ One fixed format for every character, so art from Grok Imagine (or anywhere else
 without code changes. The built-in Hiker, Runner, Dog and Cat in [`src/characters.ts`](../src/characters.ts)
 follow it exactly. Their sheets are in [`docs/sprites/`](sprites/).
 
-| Hiker | Runner | Dog | Cat |
-|---|---|---|---|
-| ![hiker](sprites/hiker-8x-guides.png) | ![runner](sprites/runner-8x-guides.png) | ![dog](sprites/dog-8x-guides.png) | ![cat](sprites/cat-8x-guides.png) |
+| | Hiker | Runner | Dog | Cat |
+|---|---|---|---|---|
+| **Male** | ![hiker](sprites/hiker-8x-guides.png) | ![runner](sprites/runner-8x-guides.png) | ![dog](sprites/dog-8x-guides.png) | ![cat](sprites/cat-8x-guides.png) |
+| **Female** | ![hiker female](sprites/hiker-female-8x-guides.png) | ![runner female](sprites/runner-female-8x-guides.png) | ![dog female](sprites/dog-female-8x-guides.png) | ![cat female](sprites/cat-female-8x-guides.png) |
+
+Male and female versions share the same outfit and the same layout. Female people get a fringe, an eyelash pixel and a ponytail
+that sticks out *above* the backpack (so it still reads at 16 px); female pets get a pink bow. A custom sheet replaces whichever
+version is selected.
 
 ## The rules
 
@@ -55,6 +60,8 @@ Image models are bad at exact grids, so make **one frame per image** and assembl
 1. **Lock the character first.** Generate a single reference pose and keep re-using it as the image reference so every frame is the same character:
 
    > Pixel art game sprite, 16×16 pixels, side view facing right, chibi hiker with a coral bucket hat, yellow t-shirt, teal backpack, blue trousers, brown boots, holding a trekking pole. Thick 1-pixel dark navy outline, flat colours, no anti-aliasing, no shading gradients, transparent background, centred, feet touching the bottom edge. Limited palette.
+
+   For a female version add e.g. *"dark brown ponytail sticking out behind the hat, short fringe"* — keep everything else identical so both sheets match.
 
 2. **One prompt per frame,** same reference image, changing only the pose line, for example:
    - `walk 1/4: mid-stride, front leg forward, back leg back, arm swinging back`

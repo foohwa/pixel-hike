@@ -7,9 +7,12 @@ const page = await browser.newPage();
 await page.goto(base);
 await page.waitForFunction(() => window.__pixelHike);
 for (const c of ['hiker', 'runner', 'dog', 'cat']) {
-  for (const [suffix, scale, guides] of [['', 1, false], ['-8x-guides', 8, true]]) {
-    const url = await page.evaluate(([c, s, g]) => window.__pixelHike.sheetDataUrl(c, s, g), [c, scale, guides]);
-    writeFileSync(`docs/sprites/${c}${suffix}.png`, Buffer.from(url.split(',')[1], 'base64'));
+  for (const gender of ['male', 'female']) {
+    for (const [suffix, scale, guides] of [['', 1, false], ['-8x-guides', 8, true]]) {
+      const url = await page.evaluate(([c, s, g, gen]) => window.__pixelHike.sheetDataUrl(c, s, g, gen), [c, scale, guides, gender]);
+      const name = gender === 'male' ? c : `${c}-female`;
+      writeFileSync(`docs/sprites/${name}${suffix}.png`, Buffer.from(url.split(',')[1], 'base64'));
+    }
   }
 }
 console.log('wrote docs/sprites/*.png');

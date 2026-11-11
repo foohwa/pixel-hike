@@ -27,6 +27,8 @@ export const SHEET_H = FRAME * ANIMS.length;
 
 export type CharacterId = 'hiker' | 'runner' | 'dog' | 'cat';
 export const CHARACTER_LABEL: Record<CharacterId, string> = { hiker: 'Hiker', runner: 'Runner', dog: 'Dog', cat: 'Cat' };
+/** People: female = fringe + ponytail. Pets: female = a pink bow. Outfits are shared. */
+export type Gender = 'male' | 'female';
 
 export interface SpriteSet {
   frames: Record<Anim, HTMLCanvasElement[]>;
@@ -94,6 +96,7 @@ interface Outfit {
   pole: boolean;
   bib: boolean;
   bareLegs: boolean;
+  female?: boolean;
 }
 
 const OUTFITS: Record<'hiker' | 'runner', Outfit> = {
@@ -114,9 +117,14 @@ const HUMAN_KEYS: Record<'hiker' | 'runner', Record<string, string>> = {
   },
 };
 
-function drawHead(g: Grid, bx: number, by: number, o: Outfit, blink?: boolean) {
+function drawHead(g: Grid, bx: number, by: number, o: Outfit, blink?: boolean, sway = 0) {
   R(g, 5 + bx, 5 + by, 10 + bx, 8 + by, 's');
   P(g, 5 + bx, 5 + by, 'r'); P(g, 5 + bx, 6 + by, 'r');
+  if (o.female) {
+    P(g, 5 + bx, 7 + by, 'r'); // longer hair at the back
+    P(g, 6 + bx, 5 + by, 'r'); P(g, 7 + bx, 5 + by, 'r'); // fringe
+    if (!blink) P(g, 10 + bx, 5 + by, 'k'); // eyelash
+  }
   if (blink) { P(g, 8 + bx, 6 + by, 'k'); P(g, 9 + bx, 6 + by, 'k'); }
   else { P(g, 9 + bx, 5 + by, 'k'); P(g, 9 + bx, 6 + by, 'k'); }
   P(g, 10 + bx, 7 + by, 'c');
@@ -124,10 +132,23 @@ function drawHead(g: Grid, bx: number, by: number, o: Outfit, blink?: boolean) {
     R(g, 5 + bx, 2 + by, 9 + bx, 3 + by, 'h');
     R(g, 4 + bx, 4 + by, 11 + bx, 4 + by, 'H');
     P(g, 8 + bx, 3 + by, 'l'); // head-lamp
+    if (o.female) {
+      // ponytail out from under the hat; the tip lags behind when the body bobs
+      // sticks out above the backpack so it reads at 16 px
+      P(g, 4 + bx, 5 + by, 'c');
+      P(g, 3 + bx, 5 + by, 'r'); P(g, 2 + bx, 5 + by, 'r'); P(g, 2 + bx, 6 + by, 'r');
+      P(g, (sway > 0 ? 1 : 2) + bx, 7 + by, 'r');
+    }
   } else {
     R(g, 5 + bx, 2 + by, 9 + bx, 4 + by, 'r'); // hair
     R(g, 5 + bx, 4 + by, 10 + bx, 4 + by, 'h'); // headband
-    P(g, 4 + bx, 4 + by, 'h'); P(g, 3 + bx, 5 + by, 'h'); // flying band tails
+    if (o.female) {
+      P(g, 4 + bx, 4 + by, 'c'); // hair tie
+      P(g, 3 + bx, 4 + by, 'r'); P(g, 2 + bx, 5 + by, 'r'); P(g, 2 + bx, 6 + by, 'r');
+      P(g, (sway > 0 ? 2 : 3) + bx, 7 + by, 'r');
+    } else {
+      P(g, 4 + bx, 4 + by, 'h'); P(g, 3 + bx, 5 + by, 'h'); // flying band tails
+    }
     P(g, 9 + bx, 4 + by, 'l');
   }
 }
@@ -152,6 +173,7 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
     P(g, 2, top, '.'); P(g, 2, 14, '.');
     R(g, 11, 11, 13, 14, 's');
     R(g, 11, 10, 13, 10, o.hat === 'bucket' ? 'h' : 'r');
+    if (o.female) { P(g, 14, 11, 'r'); P(g, 14, 12, 'r'); } // hair on the pillow
     P(g, 12, 12, 'k'); P(g, 13, 12, 'k'); // closed eyes
     P(g, 13, 13, 'c');
     return outline(g);
@@ -179,7 +201,7 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
     R(g, 5, 12, 8, 12, 'p');
     drawLeg(g, 7, 12, p.front ?? [8, 0], legFront);
   }
-  drawHead(g, bx, by, o, p.blink);
+  drawHead(g, bx, by, o, p.blink, -(p.bob ?? 0));
 
   // arms
   const sh: [number, number] = [7 + bx, 9 + by];
@@ -254,11 +276,11 @@ interface PetPose {
 type Species = 'dog' | 'cat';
 
 const PET_KEYS: Record<Species, Record<string, string>> = {
-  dog: { k: C.ink, a: C.tan, A: C.brown, e: C.brownDark, n: C.ink, R: C.red, c: C.pink },
-  cat: { k: C.ink, a: C.orange, A: C.coral, e: C.orange, n: C.pink, R: C.skyLight, c: C.pink },
+  dog: { k: C.ink, a: C.tan, A: C.brown, e: C.brownDark, n: C.ink, R: C.red, c: C.pink, w: C.pink },
+  cat: { k: C.ink, a: C.orange, A: C.coral, e: C.orange, n: C.pink, R: C.skyLight, c: C.pink, w: C.pink },
 };
 
-function drawPet(p: PetPose, sp: Species): string[] {
+function drawPet(p: PetPose, sp: Species, female = false): string[] {
   const g = grid();
   const cat = sp === 'cat';
   if (p.pose === 'curl') {
@@ -270,12 +292,13 @@ function drawPet(p: PetPose, sp: Species): string[] {
     if (cat) { P(g, 9, top, 'a'); P(g, 11, top, 'a'); } else R(g, 9, top + 1, 10, top + 2, 'e');
     P(g, 11, top + 2, 'k'); P(g, 12, top + 2, 'k');
     if (cat) { P(g, 5, top + 1, 'A'); P(g, 7, top + 1, 'A'); }
+    if (female) { P(g, 10, top, 'w'); P(g, 11, top, 'w'); }
     return outline(g, '');
   }
   if (p.pose === 'lie') {
     R(g, 3, 11, 10, 13, 'a');
     R(g, 10, 13, 13, 14, 'a'); // paws forward
-    drawPetHead(g, 0, 3, sp, p.blink);
+    drawPetHead(g, 0, 3, sp, p.blink, female);
     drawTail(g, sp, p.tail ?? 0, 3);
     return outline(g, '');
   }
@@ -301,11 +324,11 @@ function drawPet(p: PetPose, sp: Species): string[] {
   // near legs
   leg(9, nearFront, 'a');
   leg(5, nearBack, 'a');
-  drawPetHead(g, 0, hy, sp, p.blink);
+  drawPetHead(g, 0, hy, sp, p.blink, female);
   return outline(g, '');
 }
 
-function drawPetHead(g: Grid, dx: number, dy: number, sp: Species, blink?: boolean) {
+function drawPetHead(g: Grid, dx: number, dy: number, sp: Species, blink?: boolean, female = false) {
   if (sp === 'dog') {
     R(g, 10 + dx, 5 + dy, 13 + dx, 8 + dy, 'a');
     R(g, 14 + dx, 7 + dy, 14 + dx, 8 + dy, 'a'); // snout
@@ -313,14 +336,16 @@ function drawPetHead(g: Grid, dx: number, dy: number, sp: Species, blink?: boole
     R(g, 10 + dx, 5 + dy, 10 + dx, 8 + dy, 'e'); // floppy ear
     P(g, 11 + dx, 5 + dy, 'e');
     if (blink) P(g, 12 + dx, 7 + dy, 'k'); else { P(g, 12 + dx, 6 + dy, 'k'); }
-    P(g, 10 + dx, 9 + dy, 'R'); P(g, 11 + dx, 9 + dy, 'R'); // bandana
+    if (female) { P(g, 12 + dx, 4 + dy, 'w'); P(g, 13 + dx, 4 + dy, 'w'); } // bow
+    else { P(g, 10 + dx, 9 + dy, 'R'); P(g, 11 + dx, 9 + dy, 'R'); } // bandana
   } else {
     R(g, 10 + dx, 7 + dy, 13 + dx, 9 + dy, 'a');
     P(g, 11 + dx, 6 + dy, 'a'); P(g, 13 + dx, 6 + dy, 'a'); // pointy ears
     P(g, 11 + dx, 7 + dy, 'A');
     if (blink) { P(g, 12 + dx, 8 + dy, 'k'); P(g, 11 + dx, 8 + dy, 'k'); } else P(g, 12 + dx, 8 + dy, 'k');
     P(g, 13 + dx, 9 + dy, 'n');
-    P(g, 10 + dx, 10 + dy, 'R'); // collar bell
+    if (female) { P(g, 10 + dx, 10 + dy, 'w'); P(g, 11 + dx, 10 + dy, 'w'); } // neck bow
+    else P(g, 10 + dx, 10 + dy, 'R'); // collar bell
   }
 }
 
@@ -338,8 +363,8 @@ function drawTail(g: Grid, sp: Species, wag: number, by: number) {
   }
 }
 
-function petFrames(sp: Species): Record<Anim, string[][]> {
-  const D = (p: PetPose) => drawPet(p, sp);
+function petFrames(sp: Species, female: boolean): Record<Anim, string[][]> {
+  const D = (p: PetPose) => drawPet(p, sp, female);
   return {
     idle: [D({ tail: 0 }), D({ tail: 1, blink: true })],
     walk: [
@@ -390,12 +415,14 @@ function rasterise(rows: string[], keys: Record<string, string>, flip: boolean):
   return c;
 }
 
-const builtIn = new Map<CharacterId, SpriteSet>();
+const builtIn = new Map<string, SpriteSet>();
 
-export function builtInSet(id: CharacterId): SpriteSet {
-  const hit = builtIn.get(id);
+export function builtInSet(id: CharacterId, gender: Gender = 'male'): SpriteSet {
+  const key = `${id}-${gender}`;
+  const hit = builtIn.get(key);
   if (hit) return hit;
-  const maps = id === 'hiker' || id === 'runner' ? humanFrames(OUTFITS[id]) : petFrames(id);
+  const female = gender === 'female';
+  const maps = id === 'hiker' || id === 'runner' ? humanFrames({ ...OUTFITS[id], female }) : petFrames(id, female);
   const keys = id === 'hiker' || id === 'runner' ? HUMAN_KEYS[id] : PET_KEYS[id];
   const frames = {} as Record<Anim, HTMLCanvasElement[]>;
   const flipped = {} as Record<Anim, HTMLCanvasElement[]>;
@@ -408,18 +435,18 @@ export function builtInSet(id: CharacterId): SpriteSet {
     flipped,
     lamp: id === 'hiker' ? [8, 3] : id === 'runner' ? [9, 4] : null,
   };
-  builtIn.set(id, set);
+  builtIn.set(key, set);
   return set;
 }
 
 /** Load a user sheet (PNG following the standard). Empty cells fall back to the built-in frames. */
-export async function loadSheet(file: Blob, fallback: CharacterId): Promise<SpriteSet> {
+export async function loadSheet(file: Blob, fallback: CharacterId, gender: Gender = 'male'): Promise<SpriteSet> {
   const img = await createImageBitmap(file);
   if (img.width % SHEET_W !== 0 || img.height % SHEET_H !== 0 || img.width / SHEET_W !== img.height / SHEET_H) {
     throw new Error(`Sprite sheet must be ${SHEET_W}×${SHEET_H} px (or an exact multiple, e.g. ${SHEET_W * 8}×${SHEET_H * 8}).`);
   }
   const scale = img.width / SHEET_W;
-  const base = builtInSet(fallback);
+  const base = builtInSet(fallback, gender);
   const frames = {} as Record<Anim, HTMLCanvasElement[]>;
   const flipped = {} as Record<Anim, HTMLCanvasElement[]>;
   ANIMS.forEach((a, row) => {
