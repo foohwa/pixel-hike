@@ -53,6 +53,26 @@
         </div>
 
         <div class="field">
+          <span>Start / finish arch</span>
+          <div class="row">
+            <select id="gateMode" title="Opening and ending scene with a race arch">
+              <option value="auto">Auto (trail run)</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <select id="gateColor" title="Arch colour">
+              <option value="red">Red</option>
+              <option value="blue">Blue</option>
+              <option value="orange">Orange</option>
+              <option value="green">Green</option>
+              <option value="black">Black</option>
+            </select>
+          </div>
+          <input id="gateText" type="text" maxlength="28" placeholder="Banner text (defaults to the title)" />
+          <input id="gateTagline" type="text" maxlength="28" placeholder="Tagline, e.g. CAN YOU SURVIVE?" />
+        </div>
+
+        <div class="field">
           <span>Character</span>
           <div class="seg" id="character">
             <button data-v="hiker" class="on">Hiker</button>

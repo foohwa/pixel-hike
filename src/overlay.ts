@@ -1,4 +1,5 @@
 import { frameOf, type Anim, type SpriteSet } from './characters';
+import { drawGateScene, drawMiniArch, type GateOptions } from './gate';
 import type { LogoSet } from './logo';
 import { drawText, textWidth } from './font';
 import { C, PALETTE, rgb01 } from './palette';
@@ -39,6 +40,8 @@ export interface OverlayInput {
   cpScreen: Map<string, ScreenPoint>;
   showMinimap: boolean;
   logo: EventLogo | null;
+  /** Start/finish arch scenes + mini arches on the map, or null. */
+  gate: GateOptions | null;
 }
 
 export interface EventLogo {
@@ -67,6 +70,14 @@ export function drawOverlay(o: OverlayInput) {
   ctx.clearRect(0, 0, W, H);
   ctx.imageSmoothingEnabled = false;
 
+  if (o.gate && (o.state.phase === 'gateStart' || o.state.phase === 'gateFinish')) {
+    drawGateScene({
+      ctx, W, H, state: o.state, sky: o.sky, gate: o.gate, hero: o.hero, pet: o.pet,
+      logo: o.logo?.set ?? null, track: o.track, activity: o.activity, tzOffsetMin: o.tzOffsetMin,
+    });
+    return;
+  }
+
   drawWorldSprites(o);
   drawHud(o);
   drawBadge(o);
@@ -81,8 +92,8 @@ export function drawOverlay(o: OverlayInput) {
 /** Picks the animation for the current moment (shared by the hero and the companion). */
 export function pickAnim(o: Pick<OverlayInput, 'state' | 'track' | 'activity' | 'sky'>): Anim {
   const { state, track } = o;
-  if (state.phase === 'intro') return 'idle';
-  if (state.phase === 'outro') return 'cheer';
+  if (state.phase === 'intro' || state.phase === 'gateStart') return 'idle';
+  if (state.phase === 'outro' || state.phase === 'gateFinish') return 'cheer';
   if (state.phase === 'pause' && state.pauseCp) {
     switch (state.pauseCp.kind) {
       case 'rest':
@@ -127,6 +138,10 @@ function drawWorldSprites(o: OverlayInput) {
         drawSprite(ctx, AID, p.x + 15, p.y);
         break;
       default: {
+        if (o.gate && (cp.kind === 'start' || cp.kind === 'finish')) {
+          drawMiniArch(ctx, p.x, p.y, o.gate.color);
+          break;
+        }
         const raise = cp.kind === 'start' ? 1 : reached ? clamp((t - (reachT ?? 0)) / 0.5, 0, 1) : 0;
         drawFlag(ctx, p.x, p.y, reached ? KIND_COLOR[cp.kind] : C.rock, raise, t * 7, cp.kind === 'finish' && reached);
       }
@@ -219,7 +234,7 @@ function paceText(secPerKm: number) {
 
 function drawHud(o: OverlayInput) {
   const { ctx, W, track, state, sky } = o;
-  if (state.phase === 'intro' && state.t < o.timeline.intro - 0.5) return;
+  if (state.phase === 'gateStart' || (state.phase === 'intro' && state.introT < o.timeline.intro - 0.5)) return;
   const d = state.d;
   const ele = sampleAt(track, track.ele, d);
   const hr = sampleAt(track, track.hr, d);
@@ -437,7 +452,7 @@ function drawBanner(o: OverlayInput) {
   const lr = state.lastReached;
   if (!lr || lr.cp.kind === 'start') return;
   const age = state.t - lr.t;
-  if (age < 0 || age > (state.phase === 'pause' ? 99 : 0.35) || state.phase === 'outro') return;
+  if (age < 0 || age > (state.phase === 'pause' ? 99 : 0.35) || state.phase === 'outro' || state.phase === 'gateFinish') return;
   const cp = lr.cp;
   const run = o.activity === 'trailrun';
   const exclaim = cp.kind === 'summit' || cp.kind === 'finish';
@@ -473,8 +488,8 @@ function drawBanner(o: OverlayInput) {
 function drawTitleCard(o: OverlayInput) {
   const { ctx, W, H, state, track } = o;
   const end = o.timeline.intro - 0.6;
-  if (state.t > end) return;
-  const slide = clamp((state.t - (end - 0.3)) / 0.3, 0, 1);
+  if (state.phase !== 'intro' || state.introT > end) return;
+  const slide = clamp((state.introT - (end - 0.3)) / 0.3, 0, 1);
   const date = new Date(track.stats.startTime + o.tzOffsetMin * 60000);
   const dateStr = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
   const statStr = `${((track.stats.distance * track.distScale) / 1000).toFixed(1)} KM  ^${fmtInt(track.stats.ascent)} M`;
@@ -571,7 +586,7 @@ function logoHeight(o: OverlayInput, preferred: number, maxW: number) {
 /** Small logo in the bottom-right corner while the hike plays. */
 function drawBadge(o: OverlayInput) {
   const { ctx, W, H, state } = o;
-  if (!o.logo?.badge || state.phase === 'intro' || state.phase === 'outro') return;
+  if (!o.logo?.badge || state.phase !== 'move' && state.phase !== 'pause') return;
   const h = W > H ? 20 : 22;
   const img = o.logo.set.get(Math.min(h, Math.floor((W * 0.3) / o.logo.set.aspect)), true);
   const profileTop = H - 4 - 18;

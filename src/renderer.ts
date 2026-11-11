@@ -3,6 +3,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
+import type { GateOptions } from './gate';
 import { clockText, drawOverlay, type DialState, type EventLogo, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
@@ -30,6 +31,7 @@ export interface SceneData {
   hero: SpriteSet;
   pet: SpriteSet | null;
   logo: EventLogo | null;
+  gate: GateOptions | null;
 }
 
 interface Rig {
@@ -202,7 +204,7 @@ export class PixelRenderer {
     this.toasts = [];
     for (const ev of this.sunEvents) {
       const t = data.timeline.videoTimeAtClock(ev.ms);
-      if (t == null || t < data.timeline.intro) continue;
+      if (t == null || t < data.timeline.gateIn + data.timeline.intro) continue;
       this.toasts.push({ text: `${ev.kind === 'sunrise' ? 'SUNRISE' : 'SUNSET'} ${clockText(ev.ms, data.tzOffsetMin)}`, t });
     }
   }
@@ -391,8 +393,10 @@ export class PixelRenderer {
     }
     let u = 1;
     let over = this.overviewPos('start', 0);
-    if (st.phase === 'intro') {
-      u = ease(clamp((st.t - 0.9) / (timeline.intro - 0.9), 0, 1));
+    if (st.phase === 'gateStart') {
+      u = 0;
+    } else if (st.phase === 'intro') {
+      u = ease(clamp((st.introT - 0.9) / (timeline.intro - 0.9), 0, 1));
     } else if (st.phase === 'outro') {
       over = this.overviewPos('end', st.outroU * 0.7);
       u = 1 - ease(clamp(st.outroU / 0.55, 0, 1));
@@ -476,6 +480,7 @@ export class PixelRenderer {
       cpScreen,
       showMinimap: this.showMinimap,
       logo: this.data.logo,
+      gate: this.data.gate,
     });
     this.overlayTex.needsUpdate = true;
 

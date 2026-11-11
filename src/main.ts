@@ -2,6 +2,7 @@ import './style.css';
 import { DEFAULT_TRACK, decodeFile, loadTrack, PreviewPlayer, renderSoundtrack, TRACKS, audioContext } from './audio';
 import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type Gender, type SpriteSet } from './characters';
 import { loadDem } from './dem';
+import type { GateColor, GateOptions } from './gate';
 import { exportMp4 } from './export';
 import { parseFit } from './fit';
 import { parseGpx, type ParsedTrack } from './gpx';
@@ -30,6 +31,10 @@ const ui = {
   logoBadge: $<HTMLInputElement>('logoBadge'),
   logoOutro: $<HTMLInputElement>('logoOutro'),
   logoColors: $<HTMLSelectElement>('logoColors'),
+  gateMode: $<HTMLSelectElement>('gateMode'),
+  gateColor: $<HTMLSelectElement>('gateColor'),
+  gateText: $<HTMLInputElement>('gateText'),
+  gateTagline: $<HTMLInputElement>('gateTagline'),
   activity: $('activity'),
   character: $('character'),
   gender: $('gender'),
@@ -168,9 +173,20 @@ function heroSet(): SpriteSet {
   return state.customSheet ?? builtInSet(state.character, state.gender);
 }
 
+function gateOptions(): GateOptions | null {
+  const on = ui.gateMode.value === 'on' || (ui.gateMode.value === 'auto' && state.activity === 'trailrun');
+  if (!on) return null;
+  return {
+    text: ui.gateText.value.trim() || ui.title.value || 'START',
+    tagline: ui.gateTagline.value.trim(),
+    color: ui.gateColor.value as GateColor,
+  };
+}
+
 function rebuild() {
   if (!state.track || !state.terrain) return;
-  state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value));
+  const gate = gateOptions();
+  state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate });
   renderer.setData({
     track: state.track,
     terrain: state.terrain,
@@ -184,6 +200,7 @@ function rebuild() {
     logo: state.logoSet
       ? { set: state.logoSet, intro: ui.logoIntro.checked, badge: ui.logoBadge.checked, outro: ui.logoOutro.checked }
       : null,
+    gate,
   });
   state.t = Math.min(state.t, state.timeline.duration);
   ui.durLabel.textContent = `${ui.duration.value}s`;
@@ -285,6 +302,10 @@ function collectSettings() {
     logoBadge: ui.logoBadge.checked,
     logoOutro: ui.logoOutro.checked,
     logoColors: ui.logoColors.value,
+    gateMode: ui.gateMode.value,
+    gateColor: ui.gateColor.value,
+    gateText: ui.gateText.value,
+    gateTagline: ui.gateTagline.value,
   };
 }
 
@@ -304,6 +325,10 @@ function applySettings(s: Record<string, unknown>) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   if (s.logoColors === 'logo' || s.logoColors === 'palette') ui.logoColors.value = s.logoColors;
+  if (typeof s.gateMode === 'string') ui.gateMode.value = s.gateMode;
+  if (typeof s.gateColor === 'string') ui.gateColor.value = s.gateColor;
+  if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
+  if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
   if ('logo' in s) {
     const url = typeof s.logo === 'string' ? s.logo : null;
     if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
@@ -525,14 +550,14 @@ function updateHere() {
   let idx = -1;
   rows.forEach((r, i) => {
     const d = Number(r.dataset.d);
-    const passed = d <= st.d + 0.5 && st.phase !== 'intro';
+    const passed = d <= st.d + 0.5 && st.phase !== 'intro' && st.phase !== 'gateStart';
     if (passed) idx = i;
     r.classList.toggle('passed', passed && !(st.pauseCp && st.pauseCp.d === d));
     r.classList.toggle('now', !!st.pauseCp && Math.abs(st.pauseCp.d - d) < 0.5);
   });
-  if (st.phase === 'intro') idx = -1;
+  if (st.phase === 'intro' || st.phase === 'gateStart') idx = -1;
   const tr = state.track;
-  const where = st.pauseCp ? `at ${st.pauseCp.name}` : st.phase === 'intro' ? 'ready to start' : st.phase === 'outro' ? 'finished!' : 'on the trail';
+  const where = st.pauseCp ? `at ${st.pauseCp.name}` : st.phase === 'intro' || st.phase === 'gateStart' ? 'ready to start' : st.phase === 'outro' || st.phase === 'gateFinish' ? 'finished!' : 'on the trail';
   const text = `▶ YOU ARE HERE · ${where} · km ${((st.d * tr.distScale) / 1000).toFixed(1)} · ${Math.round(sampleAt(tr, tr.ele, st.d)).toLocaleString()} m · ${clockText(st.clockMs, Number(ui.tz.value || 0))}`;
   if (text !== lastHereText) { hereEl.textContent = text; lastHereText = text; }
   if (idx !== lastHereIdx || !hereEl.isConnected) {
@@ -635,6 +660,8 @@ ui.logoFile.onchange = async () => {
 ui.logoRemove.onclick = () => void setLogo(null);
 ui.logoColors.onchange = () => void setLogo(state.logoSource);
 for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
+ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
+ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
 
 ui.sheet.onchange = async () => {
   const f = ui.sheet.files?.[0];
@@ -844,6 +871,9 @@ Object.assign(window, {
     setCharacter(c: CharacterId) { setCharacter(c); },
     setGender(g: Gender) { state.gender = g; setSeg(ui.gender, g); rebuild(); },
     setCompanion(c: CharacterId | null) { state.companion = c; ui.companion.value = c ?? ''; rebuild(); },
+    setGate(mode: string, text = '', tagline = '', color = 'red') {
+      ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
+    },
     async setLogoFromUrl(url: string, colors: LogoColors = 'logo') {
       ui.logoColors.value = colors;
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
