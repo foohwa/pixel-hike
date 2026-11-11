@@ -8,11 +8,13 @@ import { litMaterial, type Terrain } from './terrain';
 import type { Track } from './track';
 
 /**
- * Rivers, streams and lakes from OpenStreetMap (© OpenStreetMap contributors, ODbL), fetched from
+ * Rivers, streams, lakes and roads from OpenStreetMap (© OpenStreetMap contributors, ODbL), fetched from
  * the public Overpass API for the diorama's area only, and cached in the browser per area.
  */
 
-export interface WaterLine { name: string; kind: 'river' | 'stream' | 'canal'; pts: [number, number][] } // [lat, lon]
+/** road = main road, minor = local tar road (residential / unclassified / service), track = dirt / 4WD. */
+export type LineKind = 'river' | 'stream' | 'canal' | 'road' | 'minor' | 'track';
+export interface WaterLine { name: string; kind: LineKind; pts: [number, number][] } // [lat, lon]
 export interface WaterArea { name: string; ring: [number, number][] }
 export interface WaterData { lines: WaterLine[]; areas: WaterArea[] }
 
@@ -25,14 +27,14 @@ const ENDPOINTS = [
 const r5 = (v: number) => Math.round(v * 1e5) / 1e5;
 
 export async function loadWater(b: BBox): Promise<WaterData> {
-  const key = `pixelhike:water:v1:${[b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join(',')}`;
+  const key = `pixelhike:water:v2:${[b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join(',')}`;
   try {
     const hit = localStorage.getItem(key);
     if (hit) return JSON.parse(hit) as WaterData;
   } catch { /* storage unavailable */ }
 
   const bb = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
-  const query = `[out:json][timeout:40];(way["waterway"~"^(river|stream|canal)$"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb}););out tags geom;`;
+  const query = `[out:json][timeout:40];(way["waterway"~"^(river|stream|canal)$"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|unclassified|residential|living_street|service|track)$"](${bb}););out tags geom;`;
   let json: OverpassResult | null = null;
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2 && !json; attempt++) {
@@ -53,7 +55,7 @@ export async function loadWater(b: BBox): Promise<WaterData> {
   const data = parse(json);
   try {
     const s = JSON.stringify(data);
-    if (s.length < 1_500_000) localStorage.setItem(key, s);
+    if (s.length < 3_000_000) localStorage.setItem(key, s);
   } catch { /* full — fine, just not cached */ }
   return data;
 }
@@ -75,7 +77,10 @@ function parse(res: OverpassResult): WaterData {
     const t = e.tags ?? {};
     if (t.water === 'wastewater') continue;
     const name = t.name ?? '';
-    if (e.type === 'way' && t.waterway && e.geometry?.length) {
+    if (e.type === 'way' && t.highway && e.geometry?.length) {
+      if (t.service === 'parking_aisle' || t.service === 'driveway' || t.access === 'private') continue;
+      lines.push({ name, kind: roadKind(t), pts: pts(e.geometry) });
+    } else if (e.type === 'way' && t.waterway && e.geometry?.length) {
       lines.push({ name, kind: t.waterway as WaterLine['kind'], pts: pts(e.geometry) });
     } else if (e.type === 'way' && t.natural === 'water' && e.geometry && e.geometry.length > 3) {
       areas.push({ name, ring: pts(e.geometry) });
@@ -86,6 +91,17 @@ function parse(res: OverpassResult): WaterData {
     }
   }
   return { lines, areas };
+}
+
+const UNPAVED = new Set(['unpaved', 'dirt', 'gravel', 'ground', 'earth', 'mud', 'sand', 'grass', 'compacted', 'fine_gravel']);
+const PAVED = new Set(['asphalt', 'paved', 'concrete', 'concrete:plates', 'paving_stones', 'chipseal', 'sett']);
+/** Local roads in OSM rarely say their surface; around villages in Malaysia they're nearly always tar. */
+function roadKind(t: Record<string, string>): LineKind {
+  const h = t.highway;
+  if (h === 'track') return PAVED.has(t.surface) ? 'minor' : 'track';
+  if (UNPAVED.has(t.surface)) return 'track';
+  if (/^(motorway|trunk|primary|secondary|tertiary)/.test(h)) return 'road';
+  return 'minor';
 }
 
 /** Joins multipolygon member ways end-to-end into closed rings. */
@@ -121,9 +137,19 @@ export interface WaterScene {
   /** Track distances where the route crosses a named river or stream (for "SUNGAI KINTA" toasts). */
   crossings: { name: string; d: number }[];
   /** Line materials, so the renderer can dim them at night and keep their pixel width. */
-  lineMats: { mat: LineMaterial; kind: 'river' | 'stream' }[];
+  lineMats: { mat: LineMaterial; kind: DrawKind }[];
   dispose(): void;
 }
+
+type DrawKind = 'river' | 'stream' | 'road' | 'minor' | 'track';
+const DRAW: Record<DrawKind, { day: string; night: string; px: number; clear: number }> = {
+  track: { day: C.tan, night: C.brownDark, px: 1, clear: 0.25 },
+  minor: { day: C.rock, night: C.night, px: 1, clear: 0.3 },
+  road: { day: C.greyLight, night: C.rockDark, px: 2, clear: 0.45 },
+  stream: { day: C.skyLight, night: C.night, px: 1, clear: 0.3 },
+  river: { day: C.sky, night: C.dusk, px: 2, clear: 0.55 },
+};
+export const drawColor = (k: DrawKind, night: boolean) => (night ? DRAW[k].night : DRAW[k].day);
 
 export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: number, H: number): WaterScene {
   const group = new THREE.Group();
@@ -134,12 +160,12 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
   const lift = s * 0.14;
 
   // rivers / streams: crisp 1–2 px lines draped on the terrain
-  const segs: Record<'river' | 'stream', number[]> = { river: [], stream: [] };
+  const segs: Record<DrawKind, number[]> = { river: [], stream: [], road: [], minor: [], track: [] };
   const xzLines: { name: string; pts: [number, number][] }[] = [];
   for (const l of data.lines) {
-    const kind = l.kind === 'stream' ? 'stream' : 'river';
+    const kind: DrawKind = l.kind === 'canal' ? 'river' : l.kind;
     const xz = l.pts.map(([la, lo]) => toXZ(la, lo));
-    if (l.name) xzLines.push({ name: l.name, pts: xz });
+    if (l.name && (kind === 'river' || kind === 'stream')) xzLines.push({ name: l.name, pts: xz });
     const out = segs[kind];
     for (let i = 1; i < xz.length; i++) {
       const [ax, az] = xz[i - 1], [bx, bz] = xz[i];
@@ -152,15 +178,15 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
       }
     }
   }
-  clearBanks(terrain, segs.river, s * 0.55);
-  clearBanks(terrain, segs.stream, s * 0.3);
+  // rivers and roads cut gaps in the canopy
+  for (const k of Object.keys(DRAW) as DrawKind[]) clearBanks(terrain, segs[k], s * DRAW[k].clear);
 
   const lineMats: WaterScene['lineMats'] = [];
-  for (const kind of ['stream', 'river'] as const) {
+  for (const kind of ['track', 'minor', 'road', 'stream', 'river'] as const) {
     if (!segs[kind].length) continue;
     const g = new LineSegmentsGeometry();
     g.setPositions(segs[kind]);
-    const mat = new LineMaterial({ color: new THREE.Color(kind === 'river' ? C.sky : C.skyLight).getHex(), linewidth: kind === 'river' ? 2 : 1, worldUnits: false });
+    const mat = new LineMaterial({ color: new THREE.Color(DRAW[kind].day).getHex(), linewidth: DRAW[kind].px, worldUnits: false });
     mat.resolution.set(W, H);
     const line = new LineSegments2(g, mat);
     line.frustumCulled = false;
@@ -282,4 +308,64 @@ function segX(ax: number, az: number, bx: number, bz: number, cx: number, cz: nu
   const t = ((cx - ax) * s2 - (cz - az) * s1) / den;
   const u = ((cx - ax) * r2 - (cz - az) * r1) / den;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? u : null;
+}
+
+// ---------------------------------------------------------------- route surface
+
+export type Surface = 'road' | 'track' | 'trail';
+export interface SurfaceInfo {
+  runs: { d0: number; d1: number; kind: Surface }[];
+  km: Record<Surface, number>;
+}
+
+/** Which parts of the route follow a tar road, a dirt track, or neither (= trail). */
+export function routeSurface(data: WaterData, track: Track): SurfaceInfo {
+  const toXZ = (lat: number, lon: number) => [(lon - track.lon0) * track.mLon, -(lat - track.lat0) * track.mLat] as [number, number];
+  const cell = 60, near = 22;
+  const grid = new Map<string, [number, number, number, number, Surface][]>();
+  for (const l of data.lines) {
+    if (l.kind !== 'road' && l.kind !== 'minor' && l.kind !== 'track') continue;
+    const kind: Surface = l.kind === 'track' ? 'track' : 'road';
+    const xz = l.pts.map(([la, lo]) => toXZ(la, lo));
+    for (let i = 1; i < xz.length; i++) {
+      const [ax, az] = xz[i - 1], [bx, bz] = xz[i];
+      const seg: [number, number, number, number, Surface] = [ax, az, bx, bz, kind];
+      const x0 = Math.floor((Math.min(ax, bx) - near) / cell), x1 = Math.floor((Math.max(ax, bx) + near) / cell);
+      const z0 = Math.floor((Math.min(az, bz) - near) / cell), z1 = Math.floor((Math.max(az, bz) + near) / cell);
+      if ((x1 - x0 + 1) * (z1 - z0 + 1) > 400) continue;
+      for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) {
+        const k = `${gx},${gz}`;
+        (grid.get(k) ?? grid.set(k, []).get(k)!).push(seg);
+      }
+    }
+  }
+  const stride = Math.max(1, Math.round(10 / track.step));
+  const samples: { d: number; kind: Surface }[] = [];
+  for (let i = 0; i < track.n; i += stride) {
+    const x = track.x[i], z = track.z[i];
+    let best = near, kind: Surface = 'trail';
+    for (const [ax, az, bx, bz, k] of grid.get(`${Math.floor(x / cell)},${Math.floor(z / cell)}`) ?? []) {
+      const dd = distSeg(x, z, ax, az, bx, bz);
+      if (dd < best) { best = dd; kind = k; }
+    }
+    samples.push({ d: track.d[i], kind });
+  }
+  // runs, with blips under 150 m absorbed by their neighbours
+  let runs: SurfaceInfo['runs'] = [];
+  for (const smp of samples) {
+    const last = runs[runs.length - 1];
+    if (last && last.kind === smp.kind) last.d1 = smp.d;
+    else runs.push({ d0: last ? last.d1 : 0, d1: smp.d, kind: smp.kind });
+  }
+  const merged: SurfaceInfo['runs'] = [];
+  for (const r of runs) {
+    const last = merged[merged.length - 1];
+    if (last && (r.d1 - r.d0 < 150 || last.kind === r.kind)) last.d1 = r.d1;
+    else merged.push({ ...r });
+  }
+  runs = merged;
+  if (runs.length) runs[runs.length - 1].d1 = track.stats.distance;
+  const km: Record<Surface, number> = { road: 0, track: 0, trail: 0 };
+  for (const r of runs) km[r.kind] += ((r.d1 - r.d0) * track.distScale) / 1000;
+  return { runs, km };
 }

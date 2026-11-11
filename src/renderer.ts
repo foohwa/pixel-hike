@@ -10,7 +10,7 @@ import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent }
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
-import { buildWater, type WaterData, type WaterScene } from './water';
+import { buildWater, drawColor, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
@@ -516,9 +516,7 @@ export class PixelRenderer {
     terrain.mist.uMistClear.value = r.camDist * 0.55;
     if (this.water) {
       const dark = sky.lamp > 0.5;
-      for (const l of this.water.scene.lineMats) {
-        l.mat.color.set(l.kind === 'river' ? (dark ? C.dusk : C.sky) : dark ? C.night : C.skyLight);
-      }
+      for (const l of this.water.scene.lineMats) l.mat.color.set(drawColor(l.kind, dark));
     }
 
     // ---- trail progress

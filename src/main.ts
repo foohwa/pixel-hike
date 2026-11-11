@@ -13,7 +13,7 @@ import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
 import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
 import type { BBox, Dem } from './dem';
-import { loadWater, type WaterData } from './water';
+import { loadWater, routeSurface, type SurfaceInfo, type WaterData } from './water';
 import { defaultDuration, Timeline } from './timeline';
 import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
@@ -104,6 +104,7 @@ const state = {
   dem: null as Dem | null,
   bbox: null as BBox | null,
   water: null as WaterData | null,
+  surface: null as SurfaceInfo | null,
   waterLoad: null as Promise<void> | null,
   checkpoints: [] as Checkpoint[],
   tombstones: [] as number[],
@@ -150,6 +151,7 @@ async function loadParsed(parsed: ParsedTrack) {
   const b = toLatLon(track, ext.x0 + ext.W + pad, ext.z0 + ext.D + pad);
   state.bbox = { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) };
   state.water = null;
+  state.surface = null;
   state.waterLoad = null;
   const dem = await loadDem(
     { minLat: Math.min(a.lat, b.lat), maxLat: Math.max(a.lat, b.lat), minLon: Math.min(a.lon, b.lon), maxLon: Math.max(a.lon, b.lon) },
@@ -814,6 +816,11 @@ function renderStats() {
   if (s.avgHr) items.push(['Avg HR', `${Math.round(s.avgHr)} bpm`]);
   if (s.calories) items.push(['Calories', `${Math.round(s.calories).toLocaleString()} kcal`]);
   if (s.avgTemp != null) items.push(['Avg temp', `${Math.round(s.avgTemp)} °C`]);
+  if (state.surface && state.track === tr) {
+    const k = state.surface.km;
+    const parts = [['trail', k.trail], ['tar road', k.road], ['dirt track', k.track]] as const;
+    items.push(['Surface', parts.filter(([, v]) => v >= 0.1).map(([n, v]) => `${n} ${v.toFixed(1)} km`).join(' · ')]);
+  }
   items.push(['Looks like', ACTIVITY_LABEL[guessActivity(tr)]]);
   ui.stats.innerHTML = items.map(([k, v]) => `<div>${k} <b>${v}</b></div>`).join('');
 }
@@ -904,6 +911,8 @@ function ensureWater(): Promise<void> {
     .then((w) => {
       if (state.track !== track) return; // another file was loaded meanwhile
       state.water = w;
+      state.surface = routeSurface(w, track!);
+      renderStats();
       rebuild();
     })
     .catch((e) => {
@@ -1137,7 +1146,7 @@ Object.assign(window, {
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
     },
-    waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length }); },
+    waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length, surface: state.surface }); },
     async setLogoFromUrl(url: string, colors: LogoColors = 'logo') {
       ui.logoColors.value = colors;
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
