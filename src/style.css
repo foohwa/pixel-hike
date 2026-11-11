@@ -74,7 +74,7 @@ button.primary:hover:not(:disabled) { background: var(--yellow); }
 .seg button { flex: 1; box-shadow: none; }
 .seg button.on { background: var(--yellow); color: var(--ink); }
 
-.cps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.cps { list-style: none; padding: 2px 4px 4px 0; margin: 0; display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; position: relative; }
 .cps li { display: grid; grid-template-columns: 16px 10px 1fr 86px 18px; gap: 5px; align-items: center; }
 .cps li.muted { display: block; color: var(--grey); }
 .cps .chip { width: 10px; height: 10px; border: 2px solid #000; }
@@ -115,3 +115,16 @@ progress { width: 100%; height: 10px; accent-color: var(--green); }
 
 footer { padding: 8px 20px 14px; font-size: 11px; color: var(--grey); }
 footer a { color: var(--sky); }
+
+.cps li.here {
+  display: block; background: var(--coral); color: var(--ink); padding: 3px 6px; font-size: 11px;
+  border: 2px solid #000; box-shadow: 2px 2px 0 #000; line-height: 1.4;
+}
+.cps li.now input[type='text'] { border-color: var(--yellow); background: #3a3320; }
+.cps li.passed input[type='text'] { color: var(--grey); }
+.cps .meta { cursor: pointer; }
+.cps .meta:hover { color: var(--yellow); }
+.credit { color: var(--grey); font-size: 10px; text-align: right; }
+#volume { width: 90px; }
+#saved { color: var(--green); }
+.cps > li { flex-shrink: 0; }

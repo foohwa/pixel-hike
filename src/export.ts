@@ -7,6 +7,8 @@ export interface ExportOptions {
   scale: number; // integer upscale of the low-res frame
   onProgress?: (u: number) => void;
   signal?: AbortSignal;
+  /** Finished soundtrack (already looped/faded to the video length), or null for a silent video. */
+  audio?: AudioBuffer | null;
 }
 
 /** Renders every frame deterministically and encodes an H.264 MP4 in the browser (WebCodecs). */
@@ -16,6 +18,8 @@ export async function exportMp4(r: PixelRenderer, opts: ExportOptions): Promise<
   }
   const W = r.W * opts.scale, H = r.H * opts.scale;
   const codec = await pickCodec(W, H, opts.fps);
+  const audio = opts.audio ?? null;
+  const audioCodec = audio ? await pickAudioCodec(audio.sampleRate, audio.numberOfChannels) : null;
 
   const up = document.createElement('canvas');
   up.width = W;
@@ -26,6 +30,9 @@ export async function exportMp4(r: PixelRenderer, opts: ExportOptions): Promise<
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     video: { codec: 'avc', width: W, height: H, frameRate: opts.fps },
+    audio: audio && audioCodec
+      ? { codec: audioCodec.muxer, sampleRate: audio.sampleRate, numberOfChannels: audio.numberOfChannels }
+      : undefined,
     fastStart: 'in-memory',
   });
   let encodeError: unknown = null;
@@ -57,6 +64,9 @@ export async function exportMp4(r: PixelRenderer, opts: ExportOptions): Promise<
   await encoder.flush();
   encoder.close();
   if (encodeError) throw encodeError;
+
+  if (audio && audioCodec) await encodeAudio(audio, audioCodec.encoder, muxer, opts.duration);
+
   muxer.finalize();
   opts.onProgress?.(1);
   return new Blob([muxer.target.buffer], { type: 'video/mp4' });
@@ -72,4 +82,51 @@ async function pickCodec(width: number, height: number, framerate: number) {
     }
   }
   throw new Error(`No H.264 encoder available for ${width}x${height}.`);
+}
+
+async function pickAudioCodec(sampleRate: number, numberOfChannels: number) {
+  if (typeof AudioEncoder === 'undefined') return null;
+  const options = [
+    { encoder: 'mp4a.40.2', muxer: 'aac' as const }, // AAC-LC: plays everywhere (iPhone, Instagram…)
+    { encoder: 'opus', muxer: 'opus' as const },
+  ];
+  for (const o of options) {
+    try {
+      const s = await AudioEncoder.isConfigSupported({ codec: o.encoder, sampleRate, numberOfChannels, bitrate: 160_000 });
+      if (s.supported) return o;
+    } catch {
+      /* try next */
+    }
+  }
+  console.warn('No audio encoder available; exporting without music.');
+  return null;
+}
+
+async function encodeAudio(buf: AudioBuffer, codec: string, muxer: Muxer<ArrayBufferTarget>, seconds: number) {
+  let err: unknown = null;
+  const enc = new AudioEncoder({
+    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    error: (e) => (err = e),
+  });
+  const { sampleRate, numberOfChannels } = buf;
+  const length = Math.min(buf.length, Math.round(seconds * sampleRate)); // never longer than the video
+  enc.configure({ codec, sampleRate, numberOfChannels, bitrate: 160_000 });
+  const block = Math.round(sampleRate / 10);
+  const chans = Array.from({ length: numberOfChannels }, (_, c) => buf.getChannelData(c));
+  for (let start = 0; start < length; start += block) {
+    if (err) throw err;
+    const n = Math.min(block, length - start);
+    const planar = new Float32Array(n * numberOfChannels);
+    chans.forEach((ch, c) => planar.set(ch.subarray(start, start + n), c * n));
+    const data = new AudioData({
+      format: 'f32-planar', sampleRate, numberOfFrames: n, numberOfChannels,
+      timestamp: Math.round((start / sampleRate) * 1e6), data: planar,
+    });
+    enc.encode(data);
+    data.close();
+    while (enc.encodeQueueSize > 16) await new Promise((r) => setTimeout(r, 1));
+  }
+  await enc.flush();
+  enc.close();
+  if (err) throw err;
 }

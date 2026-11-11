@@ -1,11 +1,13 @@
 import './style.css';
+import { DEFAULT_TRACK, decodeFile, loadTrack, PreviewPlayer, renderSoundtrack, TRACKS, audioContext } from './audio';
 import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type Gender, type SpriteSet } from './characters';
 import { loadDem } from './dem';
 import { exportMp4 } from './export';
 import { parseFit } from './fit';
 import { parseGpx, type ParsedTrack } from './gpx';
-import { KIND_COLOR } from './overlay';
+import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
+import { forget, loadSaved, mergeCheckpoints, pin, save } from './store';
 import { buildTerrain, terrainExtent, type Terrain } from './terrain';
 import { defaultDuration, Timeline } from './timeline';
 import {
@@ -32,10 +34,16 @@ const ui = {
   duration: $<HTMLInputElement>('duration'),
   durLabel: $('durLabel'),
   speedLabel: $('speedLabel'),
+  music: $<HTMLSelectElement>('music'),
+  volume: $<HTMLInputElement>('volume'),
+  musicFile: $<HTMLInputElement>('musicFile'),
+  musicCredit: $('musicCredit'),
   minimap: $<HTMLInputElement>('minimap'),
   tz: $<HTMLSelectElement>('tz'),
   cps: $('cps'),
+  saved: $('saved'),
   addCp: $<HTMLButtonElement>('addCp'),
+  resetCps: $<HTMLButtonElement>('resetCps'),
   quality: $<HTMLSelectElement>('quality'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
@@ -50,22 +58,27 @@ const ui = {
 };
 
 const renderer = new PixelRenderer(ui.canvas);
+const player = new PreviewPlayer();
 
 const state = {
   track: null as Track | null,
   terrain: null as Terrain | null,
   checkpoints: [] as Checkpoint[],
+  tombstones: [] as number[],
   timeline: null as Timeline | null,
   activity: 'hike' as Activity,
   character: 'hiker' as CharacterId,
   gender: 'male' as Gender,
   companion: null as CharacterId | null,
   customSheet: null as SpriteSet | null,
-  customCount: 0,
+  customMusic: null as { name: string; buffer: AudioBuffer } | null,
+  soundtrack: null as AudioBuffer | null,
+  soundtrackKey: '',
   t: 0,
   playing: true,
   exporting: false,
   scrubbing: false,
+  restoring: false,
 };
 
 // ------------------------------------------------------------------ loading
@@ -103,20 +116,38 @@ async function loadParsed(parsed: ParsedTrack) {
 
   state.track = track;
   state.terrain = terrain;
-  state.customCount = 0;
   state.checkpoints = [];
-  setActivity(guessActivity(track), false);
+  state.tombstones = [];
+  fillTimezones(track.stats.startTime);
+
+  // defaults for this track…
   ui.title.value = parsed.name;
   ui.duration.value = String(defaultDuration(track));
-  fillTimezones(track.stats.startTime);
+  let activity = guessActivity(track);
+  let pins: Checkpoint[] = [];
+
+  // …then whatever was saved for it last time
+  const saved = loadSaved(track);
+  state.restoring = !!saved; // don't auto-switch hiker/runner or save half-restored state
+  if (saved) {
+    applySettings(saved.settings);
+    if (typeof saved.settings.activity === 'string') activity = saved.settings.activity as Activity;
+    pins = saved.pins.map((p) => ({ ...p, pinned: true }));
+    state.tombstones = saved.tombstones ?? [];
+  }
+  state.checkpoints = pins; // so setActivity merges them in
+  setActivity(activity, false);
+  state.restoring = false;
   renderStats();
   rebuild();
   state.t = 0;
   state.playing = true;
-  [ui.play, ui.scrub, ui.export, ui.addCp].forEach((el) => (el.disabled = false));
+  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps].forEach((el) => (el.disabled = false));
   ui.play.innerHTML = '&#9208;';
+  justRestored = !!saved;
   setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
   if (!dem) setTimeout(() => setStatus(''), 3000);
+  void updateSoundtrack().then(syncAudio);
 }
 
 function heroSet(): SpriteSet {
@@ -141,33 +172,170 @@ function rebuild() {
   ui.durLabel.textContent = `${ui.duration.value}s`;
   const x = state.timeline.speedup();
   ui.speedLabel.textContent = x ? `· walking ≈ ${x >= 100 ? Math.round(x / 10) * 10 : Math.round(x)}× real speed` : '';
+  lastHereIdx = -2;
+  persist();
+}
+
+/** Auto-detected checkpoints for the current activity, with the user's pinned edits and deletions on top. */
+function refreshCheckpoints() {
+  if (!state.track) return;
+  const pins = state.checkpoints.filter((c) => c.pinned);
+  state.checkpoints = mergeCheckpoints(detectCheckpoints(state.track, state.activity), pins, state.tombstones);
+  renderCheckpointList();
 }
 
 function setActivity(a: Activity, rebuildNow = true) {
   state.activity = a;
-  ui.activity.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === a));
-  if (state.track) {
-    // re-detect, but keep checkpoints the user added
-    const custom = state.checkpoints.filter((c) => c.id.startsWith('custom'));
-    state.checkpoints = [...detectCheckpoints(state.track, a), ...custom].sort((x, y) => x.d - y.d);
-    renderCheckpointList();
+  setSeg(ui.activity, a);
+  refreshCheckpoints();
+  if (!state.restoring) {
+    if (a === 'trailrun' && state.character === 'hiker') setCharacter('runner', false);
+    if (a !== 'trailrun' && state.character === 'runner') setCharacter('hiker', false);
   }
-  if (a === 'trailrun' && state.character === 'hiker') setCharacter('runner', false);
-  if (a !== 'trailrun' && state.character === 'runner') setCharacter('hiker', false);
-  if (rebuildNow) rebuild();
+  updateMusicCredit();
+  if (rebuildNow) {
+    rebuild();
+    void updateSoundtrack().then(syncAudio);
+  }
 }
 
 function setCharacter(c: CharacterId, rebuildNow = true) {
   state.character = c;
-  ui.character.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === c));
+  setSeg(ui.character, c);
   if (rebuildNow) rebuild();
 }
+
+// ------------------------------------------------------------------ saving
+
+let persistTimer = 0;
+let justRestored = false;
+function persist() {
+  if (!state.track || state.restoring) return;
+  clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    if (!state.track) return;
+    const ok = save(state.track, {
+      settings: collectSettings(),
+      pins: state.checkpoints.filter((c) => c.pinned),
+      tombstones: state.tombstones,
+    });
+    const edits = state.checkpoints.filter((c) => c.pinned).length + state.tombstones.length;
+    const verb = justRestored ? 'restored' : 'saved';
+    justRestored = false;
+    showSaved(ok ? (edits ? `✓ ${verb} · ${edits} edit${edits > 1 ? 's' : ''}` : `✓ ${verb}`) : 'not saved (storage full?)');
+  }, 250);
+}
+
+function showSaved(text: string) {
+  ui.saved.textContent = text;
+}
+
+function collectSettings() {
+  return {
+    title: ui.title.value,
+    activity: state.activity,
+    character: state.character,
+    gender: state.gender,
+    companion: state.companion,
+    duration: Number(ui.duration.value),
+    mode: renderer.mode,
+    aspect: renderer.aspect,
+    minimap: ui.minimap.checked,
+    tz: Number(ui.tz.value),
+    music: ui.music.value === 'custom' ? 'auto' : ui.music.value, // uploaded files aren't stored
+    volume: Number(ui.volume.value),
+  };
+}
+
+function applySettings(s: Record<string, unknown>) {
+  if (typeof s.title === 'string') ui.title.value = s.title;
+  if (typeof s.character === 'string') setCharacter(s.character as CharacterId, false);
+  if (s.gender === 'male' || s.gender === 'female') { state.gender = s.gender; setSeg(ui.gender, s.gender); }
+  if ('companion' in s) { state.companion = (s.companion as CharacterId | null) ?? null; ui.companion.value = state.companion ?? ''; }
+  if (typeof s.duration === 'number') ui.duration.value = String(s.duration);
+  if (s.mode === '2d' || s.mode === '3d') { renderer.setMode(s.mode); setSeg(ui.mode, s.mode); }
+  if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); fitCanvas(); }
+  if (typeof s.minimap === 'boolean') { ui.minimap.checked = s.minimap; renderer.showMinimap = s.minimap; }
+  if (typeof s.tz === 'number') ui.tz.value = String(s.tz);
+  if (typeof s.music === 'string') ui.music.value = s.music;
+  if (typeof s.volume === 'number') ui.volume.value = String(s.volume);
+}
+
+// ------------------------------------------------------------------ music
+
+function currentTrackId(): string | null {
+  const v = ui.music.value;
+  if (v === 'none') return null;
+  if (v === 'custom') return 'custom';
+  return v === 'auto' ? DEFAULT_TRACK[state.activity] : v;
+}
+
+function updateMusicCredit() {
+  const id = currentTrackId();
+  if (!id) ui.musicCredit.textContent = '';
+  else if (id === 'custom') ui.musicCredit.textContent = `♪ ${state.customMusic?.name ?? ''}`;
+  else {
+    const t = TRACKS.find((x) => x.id === id)!;
+    ui.musicCredit.textContent = `♪ "${t.title}" · ${t.artist} (${t.license})`;
+  }
+}
+
+let soundtrackJob = 0;
+/** (Re)renders the looped + faded soundtrack when the track, length or volume changes. */
+async function updateSoundtrack() {
+  updateMusicCredit();
+  const id = currentTrackId();
+  const duration = state.timeline?.duration ?? 0;
+  const key = `${id}|${duration}|${ui.volume.value}|${state.customMusic?.name ?? ''}`;
+  if (key === state.soundtrackKey) return;
+  const job = ++soundtrackJob;
+  if (!id || !duration) {
+    state.soundtrack = null;
+    state.soundtrackKey = key;
+    syncAudio();
+    return;
+  }
+  try {
+    const src = id === 'custom' ? state.customMusic!.buffer : await loadTrack(id);
+    const buf = await renderSoundtrack(src, duration, Number(ui.volume.value));
+    if (job !== soundtrackJob) return; // a newer request won
+    state.soundtrack = buf;
+    state.soundtrackKey = key;
+    syncAudio();
+  } catch (e) {
+    console.warn('Music unavailable', e);
+    state.soundtrack = null;
+  }
+}
+
+/** Starts/stops the preview audio so it matches the play state. */
+function syncAudio() {
+  if (state.playing && state.soundtrack && !state.exporting && !state.scrubbing && state.timeline && state.t < state.timeline.duration) {
+    player.start(state.soundtrack, state.t);
+  } else player.stop();
+}
+
+let musicTimer = 0;
+function updateSoundtrackSoon() {
+  clearTimeout(musicTimer);
+  musicTimer = window.setTimeout(() => void updateSoundtrack(), 200);
+}
+
+// Browsers only allow sound after a click: resume on the first interaction.
+window.addEventListener('pointerdown', () => {
+  const c = audioContext();
+  if (c.state === 'suspended') void c.resume().then(syncAudio);
+}, { once: false });
 
 // ------------------------------------------------------------------ UI
 
 function setStatus(msg: string, error = false) {
   ui.status.textContent = msg;
   ui.status.classList.toggle('error', error);
+}
+
+function setSeg(el: HTMLElement, v: string) {
+  el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
 }
 
 function fillTimezones(startMs: number) {
@@ -190,27 +358,49 @@ function defaultName(k: CheckpointKind) {
   return ({ start: 'START', summit: 'SUMMIT', peak: 'PEAK', view: 'VIEWPOINT', rest: 'REST', camp: 'CAMP', cp: 'CP', finish: 'FINISH' })[k];
 }
 
+/** Any edit pins the checkpoint so it survives activity changes and reloads. */
+function edited(cp: Checkpoint, row?: HTMLElement) {
+  pin(cp);
+  rebuild();
+  if (row) markEdited(row);
+}
+
+/** Updates a row's "edited" markers in place (re-rendering would swallow clicks mid-edit). */
+function markEdited(row: HTMLElement) {
+  const chip = row.querySelector<HTMLElement>('.chip');
+  if (chip) { chip.style.borderColor = 'var(--yellow)'; chip.title = 'Edited by you (kept for this track)'; }
+  const meta = row.querySelector<HTMLElement>('.meta');
+  if (meta && !meta.textContent?.endsWith('edited')) meta.textContent += ' · edited';
+}
+
+const hereEl = document.createElement('li');
+hereEl.className = 'here';
+
 function renderCheckpointList() {
   ui.cps.innerHTML = '';
   for (const cp of state.checkpoints) {
     const li = document.createElement('li');
+    li.dataset.d = String(cp.d);
     const fixed = cp.kind === 'start' || cp.kind === 'finish';
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = cp.enabled;
     cb.disabled = fixed;
-    cb.onchange = () => { cp.enabled = cb.checked; rebuild(); };
+    cb.title = 'Show this checkpoint';
+    cb.onchange = () => { cp.enabled = cb.checked; edited(cp, li); };
 
     const chip = document.createElement('span');
     chip.className = 'chip';
     chip.style.background = KIND_COLOR[cp.kind];
+    chip.title = cp.pinned ? 'Edited by you (kept for this track)' : 'Auto-detected';
+    if (cp.pinned) chip.style.borderColor = 'var(--yellow)';
 
     const name = document.createElement('input');
     name.type = 'text';
     name.maxLength = 18;
     name.value = cp.name;
-    name.oninput = () => { cp.name = name.value || defaultName(cp.kind); };
+    name.oninput = () => { cp.name = name.value || defaultName(cp.kind); edited(cp, li); };
 
     const kind = document.createElement('select');
     kind.disabled = fixed;
@@ -225,8 +415,8 @@ function renderCheckpointList() {
       const old = cp.kind;
       cp.kind = kind.value as CheckpointKind;
       if (cp.name.startsWith(defaultName(old))) cp.name = defaultName(cp.kind);
+      edited(cp);
       renderCheckpointList();
-      rebuild();
     };
 
     const del = document.createElement('button');
@@ -235,6 +425,7 @@ function renderCheckpointList() {
     del.title = 'Remove checkpoint';
     del.disabled = fixed;
     del.onclick = () => {
+      state.tombstones.push(cp.d);
       state.checkpoints = state.checkpoints.filter((c) => c !== cp);
       renderCheckpointList();
       rebuild();
@@ -242,12 +433,50 @@ function renderCheckpointList() {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
+    meta.title = 'Jump to this checkpoint';
     const m = cp.stayMin ?? 0;
     const stay = m ? ` · stayed ${m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${m} min`}` : '';
-    meta.textContent = `km ${((cp.d * (state.track?.distScale ?? 1)) / 1000).toFixed(1)} · ${Math.round(cp.ele).toLocaleString()} m${stay}`;
+    meta.textContent = `km ${((cp.d * (state.track?.distScale ?? 1)) / 1000).toFixed(1)} · ${Math.round(cp.ele).toLocaleString()} m${stay}${cp.pinned ? ' · edited' : ''}`;
+    meta.onclick = () => {
+      const t = state.timeline?.reachTimes.get(cp.id) ?? (cp.kind === 'start' ? 0 : null);
+      if (t != null) seek(Math.max(0, t - 0.6));
+    };
 
     li.append(cb, chip, name, kind, del, meta);
     ui.cps.append(li);
+  }
+  lastHereIdx = -2;
+}
+
+let lastHereIdx = -2;
+let lastHereText = '';
+/** Moves the "you are here" row to sit after the last checkpoint passed, and highlights the current stop. */
+function updateHere() {
+  if (!state.timeline || !state.track) return;
+  const st = state.timeline.sample(state.t);
+  const rows = [...ui.cps.querySelectorAll<HTMLLIElement>('li[data-d]')];
+  let idx = -1;
+  rows.forEach((r, i) => {
+    const d = Number(r.dataset.d);
+    const passed = d <= st.d + 0.5 && st.phase !== 'intro';
+    if (passed) idx = i;
+    r.classList.toggle('passed', passed && !(st.pauseCp && st.pauseCp.d === d));
+    r.classList.toggle('now', !!st.pauseCp && Math.abs(st.pauseCp.d - d) < 0.5);
+  });
+  if (st.phase === 'intro') idx = -1;
+  const tr = state.track;
+  const where = st.pauseCp ? `at ${st.pauseCp.name}` : st.phase === 'intro' ? 'ready to start' : st.phase === 'outro' ? 'finished!' : 'on the trail';
+  const text = `▶ YOU ARE HERE · ${where} · km ${((st.d * tr.distScale) / 1000).toFixed(1)} · ${Math.round(sampleAt(tr, tr.ele, st.d)).toLocaleString()} m · ${clockText(st.clockMs, Number(ui.tz.value || 0))}`;
+  if (text !== lastHereText) { hereEl.textContent = text; lastHereText = text; }
+  if (idx !== lastHereIdx || !hereEl.isConnected) {
+    const after = rows[idx];
+    if (after) after.after(hereEl);
+    else ui.cps.prepend(hereEl);
+    lastHereIdx = idx;
+    // keep the marker visible inside the list's own scroll box (without moving the sidebar)
+    const box = ui.cps;
+    const top = hereEl.offsetTop, bottom = top + hereEl.offsetHeight;
+    if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) box.scrollTop = top - box.clientHeight / 2;
   }
 }
 
@@ -272,7 +501,7 @@ function bindSeg(el: HTMLElement, onPick: (v: string) => void) {
   el.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
-    el.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    setSeg(el, b.dataset.v!);
     onPick(b.dataset.v!);
   });
 }
@@ -291,16 +520,39 @@ function download(url: string, name: string) {
   a.click();
 }
 
-bindSeg(ui.mode, (v) => renderer.setMode(v as ViewMode));
-bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); });
+function seek(t: number) {
+  state.t = t;
+  syncAudio();
+}
+
+bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); persist(); });
+bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); persist(); });
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
 bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
 ui.companion.onchange = () => { state.companion = (ui.companion.value || null) as CharacterId | null; rebuild(); };
-ui.duration.oninput = () => rebuild();
+ui.duration.oninput = () => { rebuild(); updateSoundtrackSoon(); };
 ui.title.oninput = () => rebuild();
 ui.tz.onchange = () => rebuild();
-ui.minimap.onchange = () => (renderer.showMinimap = ui.minimap.checked);
+ui.minimap.onchange = () => { renderer.showMinimap = ui.minimap.checked; persist(); };
+ui.music.onchange = () => { void updateSoundtrack(); persist(); };
+ui.volume.oninput = () => { updateSoundtrackSoon(); persist(); };
+ui.musicFile.onchange = async () => {
+  const f = ui.musicFile.files?.[0];
+  if (!f) return;
+  try {
+    state.customMusic = { name: f.name, buffer: await decodeFile(f) };
+    const opt = ui.music.querySelector<HTMLOptionElement>('option[value="custom"]')!;
+    opt.hidden = false;
+    opt.textContent = `My track: ${f.name.slice(0, 24)}`;
+    ui.music.value = 'custom';
+    await updateSoundtrack();
+  } catch {
+    setStatus('Could not read that audio file.', true);
+    setTimeout(() => setStatus(''), 3000);
+  }
+  ui.musicFile.value = '';
+};
 
 ui.sheet.onchange = async () => {
   const f = ui.sheet.files?.[0];
@@ -331,12 +583,18 @@ ui.addCp.onclick = () => {
   }
   const kind: CheckpointKind = state.activity === 'trailrun' ? 'cp' : 'view';
   const time = sampleAt(tr, tr.time, d);
-  state.checkpoints.push({
-    id: `custom${state.customCount++}`, kind, name: defaultName(kind), enabled: true,
-    d, ele: sampleAt(tr, tr.ele, d), time, leaveTime: time,
-  });
+  const cp: Checkpoint = { id: '', kind, name: defaultName(kind), enabled: true, d, ele: sampleAt(tr, tr.ele, d), time, leaveTime: time };
+  pin(cp);
+  state.checkpoints.push(cp);
   state.checkpoints.sort((a, b) => a.d - b.d);
   renderCheckpointList();
+  rebuild();
+};
+ui.resetCps.onclick = () => {
+  if (!state.track || !confirm('Forget all checkpoint edits for this track?')) return;
+  state.tombstones = [];
+  state.checkpoints = [];
+  refreshCheckpoints();
   rebuild();
 };
 
@@ -344,13 +602,14 @@ ui.play.onclick = () => {
   state.playing = !state.playing;
   if (state.playing && state.timeline && state.t >= state.timeline.duration) state.t = 0;
   ui.play.innerHTML = state.playing ? '&#9208;' : '&#9654;';
+  syncAudio();
 };
 ui.scrub.oninput = () => {
   if (!state.timeline) return;
   state.t = (Number(ui.scrub.value) / 1000) * state.timeline.duration;
 };
-ui.scrub.onpointerdown = () => (state.scrubbing = true);
-ui.scrub.onpointerup = () => (state.scrubbing = false);
+ui.scrub.onpointerdown = () => { state.scrubbing = true; syncAudio(); };
+ui.scrub.onpointerup = () => { state.scrubbing = false; syncAudio(); };
 
 ui.file.onchange = async () => {
   const f = ui.file.files?.[0];
@@ -371,7 +630,9 @@ let exportAbort: AbortController | null = null;
 ui.export.onclick = async () => {
   if (!state.timeline) return;
   if (state.exporting) { exportAbort?.abort(); return; }
+  await updateSoundtrack();
   state.exporting = true;
+  syncAudio();
   exportAbort = new AbortController();
   ui.export.textContent = 'Cancel';
   ui.progress.hidden = false;
@@ -383,6 +644,7 @@ ui.export.onclick = async () => {
       scale: Number(ui.quality.value),
       onProgress: (u) => (ui.progress.value = u),
       signal: exportAbort.signal,
+      audio: state.soundtrack,
     });
     const url = URL.createObjectURL(blob);
     const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel-${renderer.mode}.mp4`;
@@ -397,6 +659,7 @@ ui.export.onclick = async () => {
     state.exporting = false;
     ui.export.textContent = 'Export MP4';
     ui.progress.hidden = true;
+    syncAudio();
   }
 };
 
@@ -404,17 +667,23 @@ ui.export.onclick = async () => {
 
 const previewCtx = ui.charPreview.getContext('2d')!;
 let last = performance.now();
+let lastHere = 0;
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (state.timeline && !state.exporting) {
     if (state.playing && !state.scrubbing) {
-      state.t += dt;
-      if (state.t > state.timeline.duration + 1.5) state.t = 0; // loop with a short hold
+      const audioT = player.time();
+      state.t = audioT ?? state.t + dt; // the music is the master clock while it plays
+      if (state.t > state.timeline.duration + 1.5) {
+        state.t = 0; // loop with a short hold
+        syncAudio();
+      }
     }
     renderer.renderAt(state.t);
     ui.scrub.value = String(Math.round((Math.min(state.t, state.timeline.duration) / state.timeline.duration) * 1000));
     ui.clock.textContent = `${Math.min(state.t, state.timeline.duration).toFixed(1)}s / ${state.timeline.duration}s`;
+    if (now - lastHere > 100) { updateHere(); lastHere = now; }
   }
   // walk-cycle preview of the chosen character (+ buddy)
   const secs = now / 1000;
@@ -442,21 +711,26 @@ Object.assign(window, {
   __pixelHike: {
     ready,
     _renderer: renderer,
-    seek(t: number) { state.playing = false; state.t = t; renderer.renderAt(t); },
-    setMode(m: ViewMode) { renderer.setMode(m); },
-    setAspect(a: Aspect) { renderer.setAspect(a); fitCanvas(); },
+    _state: state,
+    seek(t: number) { state.playing = false; state.t = t; syncAudio(); renderer.renderAt(t); updateHere(); },
+    setMode(m: ViewMode) { renderer.setMode(m); setSeg(ui.mode, m); },
+    setAspect(a: Aspect) { renderer.setAspect(a); setSeg(ui.aspect, a); fitCanvas(); },
     setActivity(a: Activity) { setActivity(a); },
     setCharacter(c: CharacterId) { setCharacter(c); },
-    setCompanion(c: CharacterId | null) { state.companion = c; rebuild(); },
-    setGender(g: Gender) { state.gender = g; ui.gender.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === g)); rebuild(); },
+    setGender(g: Gender) { state.gender = g; setSeg(ui.gender, g); rebuild(); },
+    setCompanion(c: CharacterId | null) { state.companion = c; ui.companion.value = c ?? ''; rebuild(); },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
+    forgetSaved() { if (state.track) forget(state.track); },
     sheetDataUrl(c: CharacterId, scale = 1, guides = false, g: Gender = 'male') { return renderSheet(builtInSet(c, g), scale, guides).toDataURL('image/png'); },
     get duration() { return state.timeline?.duration ?? 0; },
     get checkpoints() { return state.checkpoints; },
     get timeline() { return state.timeline; },
     get stats() { return state.track?.stats; },
     get speedup() { return state.timeline?.speedup(); },
-    exportMp4: (scale = 4, duration?: number) =>
-      exportMp4(renderer, { duration: duration ?? state.timeline!.duration, fps: 30, scale }),
+    soundtrackReady: () => updateSoundtrack().then(() => state.soundtrack?.duration ?? 0),
+    exportMp4: async (scale = 4, duration?: number) => {
+      await updateSoundtrack();
+      return exportMp4(renderer, { duration: duration ?? state.timeline!.duration, fps: 30, scale, audio: state.soundtrack });
+    },
   },
 });

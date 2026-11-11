@@ -9,6 +9,9 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **Characters** — Hiker, Runner, Dog or Cat, each male or female, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
 - **Day & night** — sun and moon positions (and the real moon phase) are computed from your GPS + timestamps: sky colours, stars, a head-lamp at night, a little sun/moon dial, and SUNRISE / SUNSET pop-ups.
 - **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
+- **Music** — four bundled CC0 chiptunes by Juhani Junkala (auto-picked per activity), or your own file. Looped to the video length with a fade-out, played in the preview and muxed into the MP4 as AAC. Credits in [`public/music/CREDITS.md`](public/music/CREDITS.md).
+- **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset edits* forgets them.
+- **You are here** — a marker in the checkpoint list follows the hiker; passed checkpoints grey out, click a checkpoint's km line to jump there.
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).
 
 ## Run
@@ -42,7 +45,9 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/renderer.ts` | Camera rig (look-ahead follow cam that lifts over ridges), trail lines, low-res render + palette/dither post pass |
 | `src/overlay.ts` | Pixel-perfect sprites (hiker, flags, tents, confetti) and HUD, drawn on a 2D canvas |
 | `src/sprites.ts`, `src/font.ts` | Props/HUD icons (flags, tent, campfire, aid station, moon phase) and a 5×7 bitmap font |
-| `src/export.ts` | Deterministic frame-by-frame render → WebCodecs H.264 → MP4 (mp4-muxer) |
+| `src/export.ts` | Deterministic frame-by-frame render → WebCodecs H.264 (+ AAC audio) → MP4 (mp4-muxer) |
+| `src/audio.ts` | Bundled tracks, soundtrack rendering (OfflineAudioContext loop + fades), preview player / clock |
+| `src/store.ts` | Per-track saved settings and checkpoint pins/deletions (localStorage), merge with auto-detection |
 
 ## Your own characters (Grok Imagine + unfake.js)
 
@@ -54,7 +59,10 @@ In the app: **Template PNG** downloads the current character's sheet to paint ov
 
 - `node scripts/shot.mjs <outdir> <3d|2d> <landscape|portrait> t1 t2 …` — screenshots at given video times (needs `npm run dev` on port 5199).
 - `node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale] [seconds]` — export in headless Chrome (use `BASE=` a `vite preview` URL so hot-reload can't interrupt it).
+- `node scripts/e2e.mjs [outdir]` — end-to-end check: checkpoint edits survive activity switches and reloads, you-are-here row, MP4 with audio.
 - `node scripts/sheets.mjs` — regenerate `docs/sprites/*.png` from the built-in characters.
 - `node scripts/gpx-to-fit.mjs in.gpx out.fit` — make a FIT test file from a GPX (adds synthetic temperature/totals; test data only).
+
+Music: "Chiptune Adventures" by Juhani Junkala, CC0 ([OpenGameArt](https://opengameart.org/content/4-chiptunes-adventure)).
 
 Elevation data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen; SRTM, GMTED, NED, ETOPO1 and others).

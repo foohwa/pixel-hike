@@ -30,6 +30,8 @@ export interface Checkpoint {
   leaveTime: number; // epoch ms when left (== time if no stop)
   enabled: boolean;
   stayMin?: number;
+  /** Edited by the user: kept as-is (and saved) no matter which activity is selected. */
+  pinned?: boolean;
 }
 
 export interface Stop {
