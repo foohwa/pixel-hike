@@ -559,26 +559,9 @@ function drawBanner(o: OverlayInput) {
 
 // ---------------------------------------------------------------- splits
 
-const ascCache = new WeakMap<Track, Float64Array>();
-/** Cumulative climb (m) along the track, same 5 m hysteresis as the total. */
-function cumAscent(track: Track) {
-  let a = ascCache.get(track);
-  if (a) return a;
-  a = new Float64Array(track.n);
-  let ref = track.ele[0], acc = 0;
-  for (let i = 0; i < track.n; i++) {
-    const e = track.ele[i];
-    if (e - ref > 5) { acc += e - ref; ref = e; }
-    else if (ref - e > 5) ref = e;
-    a[i] = acc;
-  }
-  ascCache.set(track, a);
-  return a;
-}
 const idxOf = (t: Track, d: number) => clamp(Math.round(d / t.step), 0, t.n - 1);
 function gainBetween(t: Track, d0: number, d1: number) {
-  const a = cumAscent(t);
-  return a[idxOf(t, d1)] - a[idxOf(t, d0)];
+  return t.asc[idxOf(t, d1)] - t.asc[idxOf(t, d0)];
 }
 
 /** "+8.4 KM ^620 M 2:15" for the leg that ends at `cp`. */

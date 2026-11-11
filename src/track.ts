@@ -69,6 +69,8 @@ export interface Track {
   hr: Float32Array; // NaN when missing
   temp: Float32Array; // NaN when missing
   grade: Float32Array; // rise/run, smoothed
+  /** Cumulative elevation gain (m) at each sample — same method as stats.ascent, for leg splits. */
+  asc: Float64Array;
   pace: Float32Array; // moving pace, seconds per (display) km, stops excluded
   hdx: Float32Array; // smoothed heading (unit vector)
   hdz: Float32Array;
@@ -136,6 +138,9 @@ export function buildTrack(parsed: ParsedTrack): Track {
     for (let i = 0; i < N; i++) rt[i] = start.getTime() + (rd[i] / (4000 / 3600)) * 1000;
   }
   const re = hasEle ? fillSeries(raw.map((p) => p.ele)) : new Float64Array(N);
+  // Elevation gain from the recorded points (like the watch does), not the smoothed curve:
+  // smoothing + a 5 m threshold dropped ~20% of the real climbing on barometric tracks.
+  const { cum: rawAsc, ascent: rawAscent, descent: rawDescent } = climbTotals(re);
   const rh = hasHr ? fillSeries(raw.map((p) => p.hr)) : new Float64Array(N).fill(NaN);
   const rT = hasTemp ? fillSeries(raw.map((p) => p.temp ?? null)) : new Float64Array(N).fill(NaN);
 
@@ -144,6 +149,7 @@ export function buildTrack(parsed: ParsedTrack): Track {
   const n = Math.ceil(total / step) + 1;
   const d = new Float64Array(n), x = new Float64Array(n), z = new Float64Array(n);
   const ele = new Float64Array(n), time = new Float64Array(n), hr = new Float32Array(n), temp = new Float32Array(n);
+  const asc = new Float64Array(n);
   let j = 0;
   for (let k = 0; k < n; k++) {
     const target = Math.min(k * step, total);
@@ -157,6 +163,7 @@ export function buildTrack(parsed: ParsedTrack): Track {
     time[k] = lerp(rt[j], rt[j + 1], f);
     hr[k] = lerp(rh[j], rh[j + 1], f);
     temp[k] = lerp(rT[j], rT[j + 1], f);
+    asc[k] = lerp(rawAsc[j], rawAsc[j + 1], f);
   }
 
   const xs = gaussian(x, Math.max(1, 10 / step));
@@ -193,15 +200,7 @@ export function buildTrack(parsed: ParsedTrack): Track {
   const stops = findStops(rx, rz, rt, rd, 40, 5 * 60_000);
 
   // --- stats ---
-  let ascent = 0, descent = 0;
-  {
-    let ref = eleS[0];
-    for (let i = 1; i < n; i++) {
-      const diff = eleS[i] - ref;
-      if (diff > 5) { ascent += diff; ref = eleS[i]; }
-      else if (diff < -5) { descent -= diff; ref = eleS[i]; }
-    }
-  }
+  const ascent = hasEle ? rawAscent : 0, descent = hasEle ? rawDescent : 0;
   let maxEle = -Infinity, minEle = Infinity, maxIdx = 0;
   for (let i = 0; i < n; i++) {
     if (eleS[i] > maxEle) { maxEle = eleS[i]; maxIdx = i; }
@@ -230,6 +229,12 @@ export function buildTrack(parsed: ParsedTrack): Track {
     startTime: rt[0],
     endTime: rt[N - 1],
   };
+
+  // splits should add up to the headline number (the watch's own total when the file has one)
+  if (asc[n - 1] > 0 && stats.ascent > 0) {
+    const k = stats.ascent / asc[n - 1];
+    for (let i = 0; i < n; i++) asc[i] *= k;
+  }
 
   // --- playback cost: mix of distance and (stop-capped) moving time, so steep climbs play slower ---
   const cost = new Float64Array(n);
@@ -266,7 +271,7 @@ export function buildTrack(parsed: ParsedTrack): Track {
   const distScale = session?.distance && Math.abs(session.distance / total - 1) < 0.15 ? session.distance / total : 1;
 
   return {
-    n, step, d, x: xs, z: zs, ele: eleS, time, hr, temp, grade, pace, hdx, hdz, cost,
+    n, step, d, x: xs, z: zs, ele: eleS, time, hr, temp, grade, asc, pace, hdx, hdz, cost,
     lat0, lon0, mLat, mLon, hasTime, hasHr, hasEle, hasTemp, distScale, maxIdx, stops,
     sport: parsed.sport,
     bounds: { minX, maxX, minZ, maxZ },
@@ -474,4 +479,29 @@ function fillSeries(vals: (number | null)[]): Float64Array {
   }
   if (prev >= 0) for (let k = prev + 1; k < n; k++) out[k] = out[prev];
   return out;
+}
+
+/**
+ * Total climb / descent from recorded elevations with a small dead-band, the way watches count it.
+ * Barometric data (Suunto, Garmin…) is smooth, so 1 m is enough to ignore jitter; noisy GPS-only
+ * elevation gets a bigger threshold so it doesn't invent hundreds of metres.
+ */
+export function climbTotals(e: ArrayLike<number>) {
+  const n = e.length;
+  const cum = new Float64Array(n);
+  if (n < 2) return { cum, ascent: 0, descent: 0 };
+  // noise: median |second difference| between consecutive points
+  const dd: number[] = [];
+  for (let i = 1; i < n - 1; i += Math.max(1, Math.floor(n / 4000))) dd.push(Math.abs(e[i + 1] - 2 * e[i] + e[i - 1]));
+  dd.sort((a, b) => a - b);
+  const noise = dd[Math.floor(dd.length / 2)] ?? 0;
+  const th = clamp(noise * 4, 0.95, 5);
+  let ref = e[0], ascent = 0, descent = 0;
+  for (let i = 1; i < n; i++) {
+    const diff = e[i] - ref;
+    if (diff > th) { ascent += diff; ref = e[i]; }
+    else if (diff < -th) { descent -= diff; ref = e[i]; }
+    cum[i] = ascent;
+  }
+  return { cum, ascent, descent };
 }
