@@ -1,4 +1,4 @@
-import { C } from './palette';
+import { C, type ColorName } from './palette';
 
 /**
  * Pixel Hike sprite standard v1 — see docs/SPRITE_SPEC.md.
@@ -25,8 +25,43 @@ export const FRAME = 16;
 export const SHEET_W = FRAME * 4;
 export const SHEET_H = FRAME * ANIMS.length;
 
-export type CharacterId = 'hiker' | 'runner' | 'dog' | 'cat';
-export const CHARACTER_LABEL: Record<CharacterId, string> = { hiker: 'Hiker', runner: 'Runner', dog: 'Dog', cat: 'Cat' };
+export type CharacterId = 'hiker' | 'runner' | 'me' | 'dog' | 'cat';
+export const CHARACTER_LABEL: Record<CharacterId, string> = { hiker: 'Hiker', runner: 'Runner', me: 'Me', dog: 'Dog', cat: 'Cat' };
+export const isHuman = (id: CharacterId) => id === 'hiker' || id === 'runner' || id === 'me';
+
+/** "Me": a person dressed from the user's own kit (colours are palette names). */
+export interface Look {
+  headwear: 'lamp' | 'band' | 'cap' | 'bucket' | 'none';
+  hair: ColorName;
+  skin: ColorName;
+  top: ColorName;
+  sleeves: 'short' | 'long';
+  bottoms: ColorName;
+  legs: 'shorts' | 'pants';
+  pack: 'vest' | 'backpack' | 'none';
+  packColor: ColorName;
+  shoes: ColorName;
+  hatColor: ColorName;
+  bib: boolean;
+  poles: boolean;
+  wristband: boolean;
+}
+
+/** Race kit from the user's KORGA UTR finish photos. */
+export const KORGA_LOOK: Look = {
+  headwear: 'lamp', hair: 'ink2', skin: 'skin', top: 'sky', sleeves: 'short', bottoms: 'ink2', legs: 'shorts',
+  pack: 'vest', packColor: 'ink', shoes: 'sage', hatColor: 'rockDark', bib: true, poles: false, wristband: true,
+};
+
+/** Darker partner for shading a colour (sleeve side, back leg, brim). */
+const SHADE: Partial<Record<ColorName, ColorName>> = {
+  white: 'greyLight', greyLight: 'rock', rock: 'rockDark', rockDark: 'night', skyPale: 'skyLight', skyLight: 'sky',
+  sky: 'dusk', dusk: 'night', night: 'ink2', ink2: 'ink', ink: 'ink', yellow: 'orange', cream: 'tan', orange: 'coral',
+  coral: 'red', red: 'wine', wine: 'plum', pink: 'purple', purple: 'plum', plum: 'ink2', lime: 'greenLight',
+  greenLight: 'green', green: 'forest', forest: 'forestDeep', forestDeep: 'tealDeep', sage: 'moss', moss: 'tealDeep',
+  tealDeep: 'ink2', tan: 'brown', brown: 'brownDark', brownDark: 'ink2', skin: 'tan',
+};
+const shade = (c: ColorName): ColorName => SHADE[c] ?? c;
 /** People: female = fringe + ponytail. Pets: female = a pink bow. Outfits are shared. */
 export type Gender = 'male' | 'female';
 
@@ -91,18 +126,36 @@ interface HumanPose {
 }
 
 interface Outfit {
-  hat: 'bucket' | 'band';
-  pack: boolean;
+  hat: 'bucket' | 'band' | 'lamp' | 'cap' | 'none';
+  pack: 'backpack' | 'vest' | 'none';
   pole: boolean;
   bib: boolean;
   bareLegs: boolean;
+  shortSleeves?: boolean;
+  wristband?: boolean;
   female?: boolean;
 }
 
 const OUTFITS: Record<'hiker' | 'runner', Outfit> = {
-  hiker: { hat: 'bucket', pack: true, pole: true, bib: false, bareLegs: false },
-  runner: { hat: 'band', pack: false, pole: false, bib: true, bareLegs: true },
+  hiker: { hat: 'bucket', pack: 'backpack', pole: true, bib: false, bareLegs: false },
+  runner: { hat: 'band', pack: 'none', pole: false, bib: true, bareLegs: true },
 };
+
+function lookOutfit(l: Look): Outfit {
+  return {
+    hat: l.headwear, pack: l.pack, pole: l.poles, bib: l.bib, bareLegs: l.legs === 'shorts',
+    shortSleeves: l.sleeves === 'short', wristband: l.wristband,
+  };
+}
+
+function lookKeys(l: Look): Record<string, string> {
+  const hatShade = l.headwear === 'lamp' || l.headwear === 'band' ? C.cream : C[shade(l.hatColor)];
+  return {
+    k: C.ink, h: C[l.hatColor], H: hatShade, l: C.cream, r: C[l.hair], s: C[l.skin], c: C.pink,
+    t: C[l.top], T: C[shade(l.top)], b: C[shade(l.packColor)], B: C[l.packColor], p: C[l.bottoms], P: C[shade(l.bottoms)],
+    o: C[l.shoes], w: C.rockDark, W: C.white, S: C.skyPale, g: C.purple, G: C.plum, x: C.red, y: C.red,
+  };
+}
 
 const HUMAN_KEYS: Record<'hiker' | 'runner', Record<string, string>> = {
   hiker: {
@@ -128,7 +181,23 @@ function drawHead(g: Grid, bx: number, by: number, o: Outfit, blink?: boolean, s
   if (blink) { P(g, 8 + bx, 6 + by, 'k'); P(g, 9 + bx, 6 + by, 'k'); }
   else { P(g, 9 + bx, 5 + by, 'k'); P(g, 9 + bx, 6 + by, 'k'); }
   P(g, 10 + bx, 7 + by, 'c');
-  if (o.hat === 'bucket') {
+  if (o.hat === 'lamp' || o.hat === 'none' || o.hat === 'cap') {
+    R(g, 5 + bx, 2 + by, 9 + bx, 4 + by, 'r'); // hair
+    if (o.hat !== 'cap') { P(g, 6 + bx, 1 + by, 'r'); P(g, 8 + bx, 1 + by, 'r'); } // a bit of spike
+    if (o.hat === 'lamp') {
+      R(g, 5 + bx, 4 + by, 9 + bx, 4 + by, 'h'); // strap
+      P(g, 10 + bx, 4 + by, 'l'); // the lamp itself, on the forehead
+    } else if (o.hat === 'cap') {
+      R(g, 5 + bx, 2 + by, 9 + bx, 3 + by, 'h');
+      R(g, 9 + bx, 4 + by, 11 + bx, 4 + by, 'H'); // peak
+    }
+    if (o.female) {
+      P(g, 6 + bx, 5 + by, 'r'); P(g, 7 + bx, 5 + by, 'r'); // fringe
+      P(g, 4 + bx, 4 + by, 'c');
+      P(g, 3 + bx, 4 + by, 'r'); P(g, 2 + bx, 5 + by, 'r'); P(g, 2 + bx, 6 + by, 'r');
+      P(g, (sway > 0 ? 2 : 3) + bx, 7 + by, 'r');
+    }
+  } else if (o.hat === 'bucket') {
     R(g, 5 + bx, 2 + by, 9 + bx, 3 + by, 'h');
     R(g, 4 + bx, 4 + by, 11 + bx, 4 + by, 'H');
     P(g, 8 + bx, 3 + by, 'l'); // head-lamp
@@ -172,7 +241,7 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
     R(g, 3, top + 1, 9, top + 1, 'G');
     P(g, 2, top, '.'); P(g, 2, 14, '.');
     R(g, 11, 11, 13, 14, 's');
-    R(g, 11, 10, 13, 10, o.hat === 'bucket' ? 'h' : 'r');
+    R(g, 11, 10, 13, 10, o.hat === 'bucket' || o.hat === 'cap' ? 'h' : 'r');
     if (o.female) { P(g, 14, 11, 'r'); P(g, 14, 12, 'r'); } // hair on the pillow
     P(g, 12, 12, 'k'); P(g, 13, 12, 'k'); // closed eyes
     P(g, 13, 13, 'c');
@@ -186,12 +255,21 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
   // back leg (behind everything)
   if (!sit) drawLeg(g, 6, 12, p.back ?? [5, 0], legBack);
   // backpack
-  if (o.pack) { R(g, 3 + bx, 8 + by, 4 + bx, 11 + by, 'B'); P(g, 4 + bx, 7 + by, 'B'); }
+  if (o.pack === 'backpack') { R(g, 3 + bx, 8 + by, 4 + bx, 11 + by, 'B'); P(g, 4 + bx, 7 + by, 'B'); }
   // torso
   R(g, 5 + bx, 9 + by, 8 + bx, 11 + by, 't');
   R(g, 5 + bx, 9 + by, 5 + bx, 11 + by, 'T');
-  if (o.pack) { P(g, 7 + bx, 9 + by, 'b'); P(g, 7 + bx, 10 + by, 'b'); }
-  if (o.bib) { R(g, 6 + bx, 10 + by, 7 + bx, 11 + by, 'W'); }
+  if (o.pack === 'backpack') { P(g, 7 + bx, 9 + by, 'b'); P(g, 7 + bx, 10 + by, 'b'); }
+  if (o.pack === 'vest') {
+    // race vest: snug back panel + front pocket with a soft flask (white cap)
+    P(g, 4 + bx, 9 + by, 'B'); // back panel
+    P(g, 8 + bx, 9 + by, 'W'); // flask cap
+    P(g, 8 + bx, 10 + by, 'B'); // chest pocket
+  }
+  if (o.bib) {
+    if (o.pack === 'vest') { P(g, 6 + bx, 11 + by, 'y'); P(g, 7 + bx, 11 + by, 'W'); }
+    else R(g, 6 + bx, 10 + by, 7 + bx, 11 + by, 'W');
+  }
   // hips + legs
   if (sit) {
     R(g, 5, 13, 8, 13, 'p');
@@ -205,15 +283,22 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
 
   // arms
   const sh: [number, number] = [7 + bx, 9 + by];
+  const arm = o.shortSleeves ? 's' : 'T';
   if (p.hand2) {
-    L(g, 6 + bx, 9 + by, p.hand2[0] + bx, p.hand2[1] + by, 'T');
+    L(g, 6 + bx, 9 + by, p.hand2[0] + bx, p.hand2[1] + by, arm);
+    P(g, 6 + bx, 9 + by, 'T');
     P(g, p.hand2[0] + bx, p.hand2[1] + by, 's');
   }
   const hand: [number, number] = sit
     ? p.drink ? [10, 9 + by - 3] : [10, 13]
     : [(p.hand ?? [7, 11])[0] + bx, (p.hand ?? [7, 11])[1] + by];
-  L(g, sh[0], sh[1], hand[0], hand[1], 'T');
+  L(g, sh[0], sh[1], hand[0], hand[1], arm);
+  P(g, sh[0], sh[1], 'T'); // sleeve
   P(g, hand[0], hand[1], 's');
+  if (o.wristband) {
+    const dx = sh[0] - hand[0], dy = sh[1] - hand[1], len = Math.hypot(dx, dy) || 1;
+    if (len >= 2) P(g, hand[0] + dx / len, hand[1] + dy / len, 'x');
+  }
   if (sit && p.drink) { P(g, hand[0] + 1, hand[1] - 1, 'S'); P(g, hand[0] + 1, hand[1], 'S'); }
   if (o.pole && p.pole != null && !sit) L(g, hand[0] + 1, hand[1], hand[0] + 1 + p.pole, 14, 'w');
   return outline(g);
@@ -417,13 +502,14 @@ function rasterise(rows: string[], keys: Record<string, string>, flip: boolean):
 
 const builtIn = new Map<string, SpriteSet>();
 
-export function builtInSet(id: CharacterId, gender: Gender = 'male'): SpriteSet {
-  const key = `${id}-${gender}`;
+export function builtInSet(id: CharacterId, gender: Gender = 'male', look: Look = KORGA_LOOK): SpriteSet {
+  const key = `${id}-${gender}${id === 'me' ? JSON.stringify(look) : ''}`;
   const hit = builtIn.get(key);
   if (hit) return hit;
   const female = gender === 'female';
-  const maps = id === 'hiker' || id === 'runner' ? humanFrames({ ...OUTFITS[id], female }) : petFrames(id, female);
-  const keys = id === 'hiker' || id === 'runner' ? HUMAN_KEYS[id] : PET_KEYS[id];
+  const outfit = id === 'me' ? lookOutfit(look) : id === 'hiker' || id === 'runner' ? OUTFITS[id] : null;
+  const maps = outfit ? humanFrames({ ...outfit, female }) : petFrames(id as Species, female);
+  const keys = id === 'me' ? lookKeys(look) : id === 'hiker' || id === 'runner' ? HUMAN_KEYS[id] : PET_KEYS[id as Species];
   const frames = {} as Record<Anim, HTMLCanvasElement[]>;
   const flipped = {} as Record<Anim, HTMLCanvasElement[]>;
   for (const a of ANIMS) {
@@ -433,7 +519,7 @@ export function builtInSet(id: CharacterId, gender: Gender = 'male'): SpriteSet 
   const set: SpriteSet = {
     frames,
     flipped,
-    lamp: id === 'hiker' ? [8, 3] : id === 'runner' ? [9, 4] : null,
+    lamp: id === 'hiker' ? [8, 3] : id === 'runner' ? [9, 4] : outfit?.hat === 'lamp' ? [10, 4] : outfit?.hat === 'bucket' ? [8, 3] : null,
   };
   builtIn.set(key, set);
   return set;

@@ -1,6 +1,7 @@
 import './style.css';
 import { DEFAULT_TRACK, decodeFile, loadTrack, PreviewPlayer, renderSoundtrack, TRACKS, audioContext } from './audio';
-import { builtInSet, frameOf, loadSheet, renderSheet, type CharacterId, type Gender, type SpriteSet } from './characters';
+import { builtInSet, frameOf, KORGA_LOOK, loadSheet, renderSheet, type CharacterId, type Gender, type Look, type SpriteSet } from './characters';
+import { C, type ColorName } from './palette';
 import { loadDem } from './dem';
 import type { GateColor, GateOptions } from './gate';
 import { exportMp4 } from './export';
@@ -51,6 +52,7 @@ const ui = {
   gender: $('gender'),
   companion: $<HTMLSelectElement>('companion'),
   charPreview: $<HTMLCanvasElement>('charPreview'),
+  lookEditor: $('lookEditor'),
   sheet: $<HTMLInputElement>('sheet'),
   template: $<HTMLButtonElement>('template'),
   resetSheet: $<HTMLButtonElement>('resetSheet'),
@@ -96,6 +98,7 @@ const state = {
   activity: 'hike' as Activity,
   character: 'hiker' as CharacterId,
   gender: 'male' as Gender,
+  look: { ...KORGA_LOOK } as Look,
   companion: null as CharacterId | null,
   customSheet: null as SpriteSet | null,
   customMusic: null as { name: string; buffer: AudioBuffer } | null,
@@ -184,7 +187,7 @@ async function loadParsed(parsed: ParsedTrack) {
 }
 
 function heroSet(): SpriteSet {
-  return state.customSheet ?? builtInSet(state.character, state.gender);
+  return state.customSheet ?? builtInSet(state.character, state.gender, state.look);
 }
 
 function gateOptions(): GateOptions | null {
@@ -298,8 +301,110 @@ function setActivity(a: Activity, rebuildNow = true) {
 function setCharacter(c: CharacterId, rebuildNow = true) {
   state.character = c;
   setSeg(ui.character, c);
+  ui.lookEditor.hidden = c !== 'me';
   if (rebuildNow) rebuild();
 }
+
+// ------------------------------------------------------------------ "Me": outfit editor
+
+const COLOURS: [ColorName, string][] = [
+  ['ink', 'Black'], ['ink2', 'Charcoal'], ['night', 'Navy'], ['dusk', 'Blue-grey'], ['sky', 'Blue'], ['skyLight', 'Light blue'],
+  ['tealDeep', 'Dark teal'], ['moss', 'Teal'], ['sage', 'Sage'], ['forest', 'Dark green'], ['green', 'Green'], ['greenLight', 'Lime green'],
+  ['lime', 'Neon'], ['yellow', 'Yellow'], ['orange', 'Orange'], ['coral', 'Coral'], ['red', 'Red'], ['wine', 'Maroon'], ['pink', 'Pink'],
+  ['purple', 'Purple'], ['plum', 'Plum'], ['white', 'White'], ['greyLight', 'Light grey'], ['rock', 'Grey'], ['rockDark', 'Dark grey'],
+  ['cream', 'Cream'], ['tan', 'Tan'], ['brown', 'Brown'], ['brownDark', 'Dark brown'],
+];
+const SKINS: [ColorName, string][] = [['skin', 'Light'], ['tan', 'Tan'], ['brown', 'Brown'], ['brownDark', 'Dark']];
+const HAIRS: [ColorName, string][] = [['ink2', 'Black'], ['brownDark', 'Dark brown'], ['brown', 'Brown'], ['tan', 'Light brown'], ['yellow', 'Blonde'], ['coral', 'Ginger'], ['rock', 'Grey'], ['white', 'White'], ['pink', 'Pink'], ['sky', 'Blue']];
+
+type LookField = { key: keyof Look; label: string; options?: [string, string][]; colour?: [ColorName, string][] };
+const LOOK_ROWS: LookField[][] = [
+  [{ key: 'headwear', label: 'Head', options: [['lamp', 'Headlamp'], ['band', 'Headband'], ['cap', 'Cap'], ['bucket', 'Bucket hat'], ['none', 'Nothing']] }, { key: 'hatColor', label: 'colour', colour: COLOURS }],
+  [{ key: 'hair', label: 'Hair', colour: HAIRS }, { key: 'skin', label: 'Skin', colour: SKINS }],
+  [{ key: 'top', label: 'Top', colour: COLOURS }, { key: 'sleeves', label: 'sleeves', options: [['short', 'Short sleeves'], ['long', 'Long sleeves']] }],
+  [{ key: 'bottoms', label: 'Bottoms', colour: COLOURS }, { key: 'legs', label: 'legs', options: [['shorts', 'Shorts'], ['pants', 'Long pants']] }],
+  [{ key: 'pack', label: 'Pack', options: [['vest', 'Race vest'], ['backpack', 'Backpack'], ['none', 'None']] }, { key: 'packColor', label: 'colour', colour: COLOURS }],
+  [{ key: 'shoes', label: 'Shoes', colour: COLOURS }],
+];
+
+function buildLookEditor() {
+  const el = ui.lookEditor;
+  el.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'row small';
+  head.innerHTML = '<span class="hint">Your kit (from the KORGA finish photo)</span>';
+  const preset = document.createElement('button');
+  preset.className = 'mini';
+  preset.textContent = 'KORGA kit';
+  preset.title = 'Headlamp, blue-grey tee, black race vest, bib, black shorts, red wristband, grey-green shoes';
+  preset.onclick = () => { state.look = { ...KORGA_LOOK }; syncLookEditor(); rebuild(); };
+  head.append(preset);
+  el.append(head);
+  for (const row of LOOK_ROWS) {
+    const r = document.createElement('div');
+    r.className = 'lrow';
+    for (const f of row) {
+      const sel = document.createElement('select');
+      sel.dataset.key = f.key;
+      sel.title = f.label;
+      for (const [v, label] of f.options ?? f.colour ?? []) sel.add(new Option(f.key === 'skin' ? `${label} skin` : label, v));
+      if (f.colour) sel.classList.add('swatch');
+      sel.onchange = () => {
+        (state.look as unknown as Record<string, string>)[f.key] = sel.value;
+        paintSwatch(sel);
+        rebuild();
+      };
+      if (row.length === 1 || f === row[0]) {
+        const lab = document.createElement('em');
+        lab.textContent = f.label;
+        r.append(lab);
+      }
+      r.append(sel);
+    }
+    el.append(r);
+  }
+  const checks = document.createElement('div');
+  checks.className = 'row small';
+  for (const [key, label] of [['bib', 'Race bib'], ['poles', 'Poles'], ['wristband', 'Wristband']] as const) {
+    const lab = document.createElement('label');
+    lab.className = 'check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.key = key;
+    cb.onchange = () => { state.look[key] = cb.checked; rebuild(); };
+    lab.append(cb, ` ${label}`);
+    checks.append(lab);
+  }
+  el.append(checks);
+  syncLookEditor();
+}
+
+function paintSwatch(sel: HTMLSelectElement) {
+  if (!sel.classList.contains('swatch')) return;
+  sel.style.borderLeft = `14px solid ${C[sel.value as ColorName] ?? 'transparent'}`;
+}
+
+function syncLookEditor() {
+  ui.lookEditor.querySelectorAll<HTMLSelectElement>('select').forEach((s) => {
+    s.value = String(state.look[s.dataset.key as keyof Look]);
+    paintSwatch(s);
+  });
+  ui.lookEditor.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach((c) => {
+    c.checked = !!state.look[c.dataset.key as keyof Look];
+  });
+}
+
+function parseLook(json: unknown): Look | null {
+  if (typeof json !== 'string') return null;
+  try {
+    const l = JSON.parse(json) as Partial<Look>;
+    return { ...KORGA_LOOK, ...l };
+  } catch {
+    return null;
+  }
+}
+
+buildLookEditor();
 
 // ------------------------------------------------------------------ saving
 
@@ -351,6 +456,7 @@ function collectSettings() {
     activity: state.activity,
     character: state.character,
     gender: state.gender,
+    look: JSON.stringify(state.look),
     companion: state.companion,
     duration: Number(ui.duration.value),
     mode: renderer.mode,
@@ -382,6 +488,8 @@ function collectSettings() {
 function applySettings(s: Record<string, unknown>) {
   if (typeof s.title === 'string') ui.title.value = s.title;
   if (typeof s.character === 'string') setCharacter(s.character as CharacterId, false);
+  const look = parseLook(s.look);
+  if (look) { state.look = look; syncLookEditor(); }
   if (s.gender === 'male' || s.gender === 'female') { state.gender = s.gender; setSeg(ui.gender, s.gender); }
   if ('companion' in s) { state.companion = (s.companion as CharacterId | null) ?? null; ui.companion.value = state.companion ?? ''; }
   if (typeof s.duration === 'number') ui.duration.value = String(s.duration);
@@ -954,6 +1062,7 @@ Object.assign(window, {
     setAspect(a: Aspect) { renderer.setAspect(a); setSeg(ui.aspect, a); fitCanvas(); },
     setActivity(a: Activity) { setActivity(a); },
     setCharacter(c: CharacterId) { setCharacter(c); },
+    setLook(l: Partial<Look>) { state.look = { ...state.look, ...l }; syncLookEditor(); rebuild(); },
     setGender(g: Gender) { state.gender = g; setSeg(ui.gender, g); rebuild(); },
     setCompanion(c: CharacterId | null) { state.companion = c; ui.companion.value = c ?? ''; rebuild(); },
     setGate(mode: string, text = '', tagline = '', color = 'red') {

@@ -151,3 +151,9 @@ details.fold[open] > summary::before { content: '▾ '; }
 details.fold > summary i { font-style: normal; text-transform: none; letter-spacing: 0; opacity: 0.6; }
 details.fold[open] { display: flex; }
 details.fold:not([open]) { display: block; }
+
+.look { display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--ink2); border: 2px solid var(--night); }
+.lrow { display: grid; grid-template-columns: 52px 1fr 1fr; gap: 4px; align-items: center; font-size: 11px; }
+.lrow em { font-style: normal; color: var(--yellow); }
+.lrow select { padding: 3px 4px; font-size: 11px; }
+.lrow select:only-of-type { grid-column: 2 / 4; }
