@@ -11,7 +11,8 @@ import { LogoSet, prepareLogo, type LogoColors, type LogoSource } from './logo';
 import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
-import { buildTerrain, terrainExtent, type Terrain } from './terrain';
+import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
+import type { Dem } from './dem';
 import { defaultDuration, Timeline } from './timeline';
 import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
@@ -37,6 +38,11 @@ const ui = {
   gateColor: $<HTMLSelectElement>('gateColor'),
   gateText: $<HTMLInputElement>('gateText'),
   gateTagline: $<HTMLInputElement>('gateTagline'),
+  scenery: $<HTMLSelectElement>('scenery'),
+  envClouds: $<HTMLInputElement>('envClouds'),
+  envLife: $<HTMLInputElement>('envLife'),
+  envSigns: $<HTMLInputElement>('envSigns'),
+  envSplits: $<HTMLInputElement>('envSplits'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
   zoneRows: $('zoneRows'),
   zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
@@ -92,6 +98,7 @@ const player = new PreviewPlayer();
 const state = {
   track: null as Track | null,
   terrain: null as Terrain | null,
+  dem: null as Dem | null,
   checkpoints: [] as Checkpoint[],
   tombstones: [] as number[],
   timeline: null as Timeline | null,
@@ -145,10 +152,11 @@ async function loadParsed(parsed: ParsedTrack) {
 
   setStatus('Building diorama…');
   await new Promise((r) => setTimeout(r, 0));
-  const terrain = buildTerrain(track, dem);
+  const terrain = buildTerrain(track, dem, resolveScenery(ui.scenery.value as SceneryChoice, track));
 
   state.track = track;
   state.terrain = terrain;
+  state.dem = dem;
   state.checkpoints = [];
   state.tombstones = [];
   fillTimezones(track.stats.startTime);
@@ -246,6 +254,9 @@ function renderZoneSummary() {
 function rebuild() {
   if (!state.track || !state.terrain) return;
   const gate = gateOptions();
+  // scenery decides the trees + land colours, so a change means a new diorama
+  const scenery = resolveScenery(ui.scenery.value as SceneryChoice, state.track);
+  if (state.terrain.scenery !== scenery) state.terrain = buildTerrain(state.track, state.dem, scenery);
   state.zones = buildZones(state.track, zoneSettings());
   ui.zoneRows.classList.toggle('off', !ui.zonesOn.checked);
   ui.zoneState.textContent = ui.zonesOn.checked ? 'on' : 'off';
@@ -266,6 +277,13 @@ function rebuild() {
       : null,
     gate,
     zones: state.zones,
+    env: {
+      scenery,
+      clouds: ui.envClouds.checked,
+      life: ui.envLife.checked,
+      signs: ui.envSigns.checked,
+      splits: ui.envSplits.checked,
+    },
   });
   state.t = Math.min(state.t, state.timeline.duration);
   ui.durLabel.textContent = `${ui.duration.value}s`;
@@ -474,6 +492,11 @@ function collectSettings() {
     gateColor: ui.gateColor.value,
     gateText: ui.gateText.value,
     gateTagline: ui.gateTagline.value,
+    scenery: ui.scenery.value,
+    envClouds: ui.envClouds.checked,
+    envLife: ui.envLife.checked,
+    envSigns: ui.envSigns.checked,
+    envSplits: ui.envSplits.checked,
     zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
@@ -507,6 +530,10 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateColor === 'string') ui.gateColor.value = s.gateColor;
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
+  if (s.scenery === 'auto' || s.scenery === 'tropical' || s.scenery === 'alpine' || s.scenery === 'classic') ui.scenery.value = s.scenery;
+  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits]] as const) {
+    if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
+  }
   for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
@@ -849,6 +876,7 @@ ui.logoColors.onchange = () => void setLogo(state.logoSource);
 for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
 ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
+for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits]) el.onchange = () => rebuild();
 for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
 ui.zoneReset.onclick = () => {
   if (!state.track) return;
@@ -1073,6 +1101,14 @@ Object.assign(window, {
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
     },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
+    setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean }) {
+      if (e.scenery) ui.scenery.value = e.scenery;
+      if (e.clouds != null) ui.envClouds.checked = e.clouds;
+      if (e.life != null) ui.envLife.checked = e.life;
+      if (e.signs != null) ui.envSigns.checked = e.signs;
+      if (e.splits != null) ui.envSplits.checked = e.splits;
+      rebuild();
+    },
     setZones(z: Partial<ZoneSettings>) { setZoneUi({ ...zoneSettings(), ...z }); rebuild(); },
     zones() { return state.zones && { runs: state.zones.runs, tech: state.zones.tech, summary: ui.zoneSummary.textContent }; },
     forgetSaved() { if (state.track) forget(state.track); },

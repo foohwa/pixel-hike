@@ -7,7 +7,7 @@ import type { GateOptions } from './gate';
 import { clockText, drawOverlay, type DecorFrame, type DecorItem, type DialState, type EventLogo, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
-import { shared, type Terrain } from './terrain';
+import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
@@ -35,6 +35,20 @@ export interface SceneData {
   gate: GateOptions | null;
   /** Elevation zones + technical stretches used to dress the trail, or null. */
   zones: TrailZones | null;
+  env: EnvOptions;
+}
+
+/** Optional scenery extras (each can be switched off in the sidebar). */
+export interface EnvOptions {
+  scenery: Scenery;
+  /** Valley mist, drifting cloud shadows, clouds in the sky. */
+  clouds: boolean;
+  /** Fireflies, birds at dawn/dusk, a head-lamp beam pointing ahead. */
+  life: boolean;
+  /** Summit signboards + aid-station tents. */
+  signs: boolean;
+  /** Leg splits on checkpoint banners + "next checkpoint" line. */
+  splits: boolean;
 }
 
 interface Rig {
@@ -105,6 +119,9 @@ export class PixelRenderer {
         uSun: { value: new THREE.Vector3() },
         uMoon: { value: new THREE.Vector3() },
         uMoonPhase: { value: 0.5 },
+        uSkyCloud: { value: 0 },
+        uCloudCol: { value: new THREE.Vector3(1, 1, 1) },
+        uYawPx: { value: 0 },
       },
       vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
       fragmentShader: /* glsl */ `
@@ -113,10 +130,15 @@ export class PixelRenderer {
         uniform vec3 uSkyTop; uniform vec3 uSkyBot; uniform float uStars; uniform float uTime;
         uniform vec2 uRes; uniform float uDither;
         uniform vec3 uSun; uniform vec3 uMoon; uniform float uMoonPhase;
+        uniform float uSkyCloud; uniform vec3 uCloudCol; uniform float uYawPx;
         varying vec2 vUv;
         float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
         float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
         float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        float vn(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
         vec3 quant(vec3 c, vec2 px){
           c += (bayer4(px) - 0.5) * uDither;
           vec3 best = uPal[0]; float bd = 1e9;
@@ -140,6 +162,15 @@ export class PixelRenderer {
               col = mix(col, vec3(0.96), uStars * (0.6 + 0.4 * tw));
             }
             // sun and moon at their real positions (only where the sky shows)
+            // pixel clouds in a band above the horizon; they follow the camera's heading so they don't stick to the screen
+            if (uSkyCloud > 0.0) {
+              vec2 cp = vec2((px.x + uYawPx) / 52.0 + uTime * 0.05, px.y / 9.0);
+              float cn = vn(cp) * 0.65 + vn(cp * 2.1 + 4.3) * 0.35;
+              float band = smoothstep(0.42, 0.6, vUv.y) * (1.0 - smoothstep(0.82, 0.97, vUv.y));
+              float v = cn * band;
+              if (v > 0.5) col = uCloudCol;
+              else if (v > 0.44) col = mix(col, uCloudCol, 0.55);
+            }
             if (uSun.z > 0.5) {
               float r = length(px - uSun.xy);
               if (r <= 5.6) col = r <= 3.6 ? vec3(1.0, 0.914, 0.639) : vec3(1.0, 0.804, 0.459);
@@ -440,6 +471,16 @@ export class PixelRenderer {
     shared.uLampPos.value.set(hx, hy, hz);
     shared.uLamp.value = sky.lamp;
     shared.uLampR.value = r.camDist * 0.16;
+    const env = this.data.env;
+    shared.uTime.value = st.t;
+    shared.uCloud.value = env.clouds && !is2d ? clamp(1 - sky.lamp, 0, 1) : 0;
+    shared.uCloudScale.value = terrain.size * 0.05;
+    shared.uWind.value.set(terrain.size * 0.004, terrain.size * 0.0013);
+    shared.uBeam.value = env.life ? 1 : 0;
+    shared.uLampDir.value.set(sampleAt(track, track.hdx, st.d), sampleAt(track, track.hdz, st.d)).normalize();
+    if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
+    terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
+    terrain.mist.uMistClear.value = r.camDist * 0.55;
 
     // ---- trail progress
     const tr = this.trail!;
@@ -500,6 +541,7 @@ export class PixelRenderer {
       gate: this.data.gate,
       zones: this.data.zones,
       decor,
+      env: this.data.env,
     });
     this.overlayTex.needsUpdate = true;
 
@@ -515,6 +557,17 @@ export class PixelRenderer {
     this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
     if (pu.uSun.value.z > 0.5) pu.uMoon.value.z = 0; // keep it simple: one disc at a time
     pu.uMoonPhase.value = moonPhase(ms);
+    pu.uSkyCloud.value = env.clouds ? 1 : 0;
+    const night = clamp(sky.lamp, 0, 1);
+    const cb = sky.bottom;
+    pu.uCloudCol.value.set(
+      (cb[0] + (1 - cb[0]) * 0.65) * (1 - night * 0.55),
+      (cb[1] + (1 - cb[1]) * 0.65) * (1 - night * 0.55),
+      (cb[2] + (1 - cb[2]) * 0.65) * (1 - night * 0.45),
+    );
+    const dir = this.camera.getWorldDirection(this.tmp2);
+    const hfov = 2 * Math.atan(Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect);
+    pu.uYawPx.value = (Math.atan2(dir.x, -dir.z) / hfov) * this.W;
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);
@@ -531,6 +584,19 @@ export class PixelRenderer {
   }
 
   private tmp = new THREE.Vector3();
+  private tmp2 = new THREE.Vector3();
+
+  /** Mist thickness by time of day: thick around sunrise, light by day, medium at night. */
+  private mistAt(ms: number) {
+    let rise: number | null = null;
+    for (const e of this.sunEvents) if (e.kind === 'sunrise' && e.ms <= ms + 2 * 3600_000) rise = e.ms;
+    const h = rise != null ? (ms - rise) / 3600_000 : 99; // hours since (or before) sunrise
+    const night = this.data ? skyAt(ms, this.data.track.lat0, this.data.track.lon0).lamp : 0;
+    // morning mist: thick from ~2 h before sunrise, burning off by ~4 h after; a little at night
+    if (h >= -2 && h <= 2) return 0.95;
+    if (h > 2 && h < 4) return 0.95 - (h - 2) * 0.45;
+    return night > 0.5 ? 0.35 : 0;
+  }
 
   /** True when a ridge sits between the camera and the point (cheap ray march over the height field). */
   private occluded(x: number, y: number, z: number) {

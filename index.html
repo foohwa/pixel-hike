@@ -72,6 +72,20 @@
           <input id="gateTagline" type="text" maxlength="28" placeholder="Tagline, e.g. CAN YOU SURVIVE?" />
         </div>
 
+        <div class="field">
+          <span>Scenery</span>
+          <select id="scenery" title="Trees and land colours">
+            <option value="auto">Auto (by location)</option>
+            <option value="tropical">Tropical rainforest</option>
+            <option value="alpine">Alpine (treeline, rock, snow)</option>
+            <option value="classic">Classic</option>
+          </select>
+          <div class="row small">
+            <label class="check" title="Valley mist (thickest around sunrise), drifting cloud shadows, clouds in the sky"><input type="checkbox" id="envClouds" checked /> Clouds &amp; mist</label>
+            <label class="check" title="Fireflies on jungle nights, birds at dawn/dusk, head-lamp beam"><input type="checkbox" id="envLife" checked /> Fireflies &amp; birds</label>
+          </div>
+        </div>
+
         <details class="field fold" id="zonesFold">
           <summary>Trail zones <i id="zoneState">off</i></summary>
           <label class="check"><input type="checkbox" id="zonesOn" /> Decorate the trail by elevation <i class="hint">(experimental)</i></label>
@@ -169,6 +183,10 @@
 
         <div class="field">
           <span>Checkpoints <i id="saved"></i></span>
+          <div class="row small">
+            <label class="check" title="Signboard with the name + height at summits and peaks; aid tents at race checkpoints"><input type="checkbox" id="envSigns" checked /> Summit signs &amp; aid tents</label>
+            <label class="check" title="Distance, climb and time for each leg + a NEXT checkpoint line"><input type="checkbox" id="envSplits" checked /> Splits &amp; next</label>
+          </div>
           <ul id="cps" class="cps"><li class="muted">Load a track first.</li></ul>
           <div class="row">
             <button id="addCp" class="mini" disabled>+ Add checkpoint here</button>

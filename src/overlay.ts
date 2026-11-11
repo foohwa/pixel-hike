@@ -8,6 +8,7 @@ import { AID, CAMPFIRE, drawFlag, drawMoon, drawSprite, HEART, MOON, MOUNTAIN, S
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 import { DECOR_KEYS, WARN_SIGN, ZONE_COLOR, type TrailZones } from './zones';
+import type { EnvOptions } from './renderer';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
 
@@ -55,6 +56,7 @@ export interface OverlayInput {
   zones: TrailZones | null;
   /** Props along the trail for this frame (see PixelRenderer.decorFrame), or null. */
   decor: DecorFrame | null;
+  env: EnvOptions;
 }
 
 export interface EventLogo {
@@ -92,7 +94,9 @@ export function drawOverlay(o: OverlayInput) {
   }
 
   drawWorldSprites(o);
+  drawBirds(o);
   drawHud(o);
+  drawNext(o);
   drawBadge(o);
   drawToasts(o);
   drawBanner(o);
@@ -186,9 +190,16 @@ function drawWorldSprites(o: OverlayInput) {
         drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
         break;
       case 'cp':
-        drawSprite(ctx, AID, p.x + 15, p.y);
+        if (o.env.signs) drawSprite(ctx, AID_TENT, p.x + 17, p.y + 1, { keys: AID_KEYS });
+        else drawSprite(ctx, AID, p.x + 15, p.y);
         break;
       default: {
+        if (o.env.signs && (cp.kind === 'summit' || cp.kind === 'peak')) {
+          // the summit signboard: small from afar, full size with name + height while you're standing there
+          const here = state.phase === 'pause' && state.pauseCp?.id === cp.id;
+          if (here) drawSummitSign(ctx, cp, p.x, p.y, o.W);
+          else drawSprite(ctx, SIGN_SMALL, p.x + 9, p.y + 1, { keys: SIGN_KEYS2 });
+        }
         if (o.gate && (cp.kind === 'start' || cp.kind === 'finish')) {
           drawMiniArch(ctx, p.x, p.y, o.gate.color);
           break;
@@ -200,6 +211,8 @@ function drawWorldSprites(o: OverlayInput) {
   }
 
   const anim = pickAnim(o);
+
+  drawFireflies(o);
 
   // companion trots a little behind
   if (o.pet && o.petAt?.visible) {
@@ -401,7 +414,7 @@ function drawToasts(o: OverlayInput) {
     if (age < 0 || age > 2.2) continue;
     const w = textWidth(toast.text) + 10;
     const slide = Math.min(1, age * 5);
-    const y0 = W < H ? H - 4 - 18 - 18 : 30;
+    const y0 = W < H ? H - 4 - 18 - 18 - (o.env.splits ? 16 : 0) : 30;
     const y = Math.round(y0 + (1 - slide) * (W < H ? 8 : -8));
     panel(ctx, Math.round(W / 2 - w / 2), y, w, 12, C.cream, C.ink);
     drawText(ctx, toast.text, W / 2, y + 3, C.plum, { align: 'center' });
@@ -524,11 +537,14 @@ function drawBanner(o: OverlayInput) {
     case 'finish': sub = run ? elapsed : `${km}  ${time}`; break;
     default: sub = `${fmtInt(cp.ele)} M  ${run ? elapsed : time}`;
   }
+  // with signboards on, the name is on the sign; the banner just celebrates
+  if (o.env.signs && (cp.kind === 'summit' || cp.kind === 'peak') && state.phase === 'pause') title = cp.kind === 'summit' ? 'SUMMIT!' : 'PEAK!';
+  const leg = o.env.splits ? legText(o, cp) : null;
   let scale = 2;
   if (textWidth(title, 2) > W - 24) scale = 1;
   if (textWidth(title, 1) > W - 16) title = title.slice(0, Math.floor((W - 16) / 6));
-  const bw = Math.max(textWidth(title, scale), textWidth(sub)) + 16;
-  const bh = 7 * scale + 7 + 12;
+  const bw = Math.max(textWidth(title, scale), textWidth(sub), leg ? textWidth(leg) : 0) + 16;
+  const bh = 7 * scale + 7 + 12 + (leg ? 9 : 0);
   const drop = easeOutBack(clamp(age * 4, 0, 1));
   const top = H > W ? 84 : 44; // keep clear of the dial / minimap
   const y = Math.round(top - (1 - drop) * (top + 20));
@@ -538,6 +554,161 @@ function drawBanner(o: OverlayInput) {
   ctx.fillRect(x + 2, y + 2, bw - 4, 2);
   drawText(ctx, title, W / 2, y + 6, C.ink, { scale, align: 'center' });
   drawText(ctx, sub, W / 2, y + 7 * scale + 9, C.wine, { align: 'center' });
+  if (leg) drawText(ctx, leg, W / 2, y + 7 * scale + 18, C.forest, { align: 'center' });
+}
+
+// ---------------------------------------------------------------- splits
+
+const ascCache = new WeakMap<Track, Float64Array>();
+/** Cumulative climb (m) along the track, same 5 m hysteresis as the total. */
+function cumAscent(track: Track) {
+  let a = ascCache.get(track);
+  if (a) return a;
+  a = new Float64Array(track.n);
+  let ref = track.ele[0], acc = 0;
+  for (let i = 0; i < track.n; i++) {
+    const e = track.ele[i];
+    if (e - ref > 5) { acc += e - ref; ref = e; }
+    else if (ref - e > 5) ref = e;
+    a[i] = acc;
+  }
+  ascCache.set(track, a);
+  return a;
+}
+const idxOf = (t: Track, d: number) => clamp(Math.round(d / t.step), 0, t.n - 1);
+function gainBetween(t: Track, d0: number, d1: number) {
+  const a = cumAscent(t);
+  return a[idxOf(t, d1)] - a[idxOf(t, d0)];
+}
+
+/** "+8.4 KM ^620 M 2:15" for the leg that ends at `cp`. */
+function legText(o: OverlayInput, cp: Checkpoint): string | null {
+  if (cp.kind === 'start') return null;
+  const prev = o.checkpoints
+    .filter((c) => c.enabled && c.d < cp.d - 1)
+    .sort((a, b) => b.d - a.d)[0];
+  if (!prev) return null;
+  const t = o.track;
+  const km = ((cp.d - prev.d) * t.distScale) / 1000;
+  const gain = gainBetween(t, prev.d, cp.d);
+  const ms = Math.max(0, cp.time - prev.leaveTime);
+  const h = Math.floor(ms / 3600_000), m = Math.round((ms % 3600_000) / 60_000);
+  const dur = h ? `${h}:${String(m).padStart(2, '0')}` : `${m} MIN`;
+  return `+${km.toFixed(1)} KM  ^${fmtInt(gain)} M  ${dur}`;
+}
+
+/** Bottom-left: what's coming up. */
+function drawNext(o: OverlayInput) {
+  const { ctx, W, H, state, track } = o;
+  if (!o.env.splits || state.phase !== 'move') return;
+  const next = o.checkpoints
+    .filter((c) => c.enabled && c.kind !== 'start' && c.d > state.d + 30)
+    .sort((a, b) => a.d - b.d)[0];
+  if (!next) return;
+  const km = ((next.d - state.d) * track.distScale) / 1000;
+  const gain = gainBetween(track, state.d, next.d);
+  const tail = `${km.toFixed(1)} KM${gain >= 10 ? ` ^${fmtInt(gain)} M` : ''}`;
+  const maxW = Math.floor(W * (o.logo?.badge ? 0.64 : 0.9)) - 12;
+  let name = next.name.toUpperCase();
+  const fixed = textWidth(`NEXT  ${tail}`) + 8;
+  while (name.length > 3 && fixed + textWidth(name) > maxW) name = name.slice(0, -1);
+  if (name !== next.name.toUpperCase()) name = name.slice(0, -1) + '.';
+  const y = H - 4 - 18 - 3 - 11;
+  const w = fixed + textWidth(name) + 6;
+  panel(ctx, 4, y, w, 11);
+  ctx.fillStyle = KIND_COLOR[next.kind] === C.white ? C.cream : KIND_COLOR[next.kind];
+  ctx.fillRect(7, y + 3, 2, 5);
+  drawText(ctx, 'NEXT', 12, y + 2, C.rock);
+  drawText(ctx, name, 12 + textWidth('NEXT ') + 4, y + 2, C.white);
+  drawText(ctx, tail, 4 + w - 4, y + 2, C.yellow, { align: 'right' });
+}
+
+// ---------------------------------------------------------------- signs & tents
+
+const SIGN_KEYS2 = { k: C.ink, m: C.cream, L: C.brown, r: C.red };
+const SIGN_SMALL = ['kkkkkkk', 'kmrmrmk', 'kmmmmmk', 'kkkkkkk', '.kL.Lk.', '.kL.Lk.', '.kL.Lk.'];
+
+const AID_KEYS = { k: C.ink, S: C.red, W: C.white, s: C.skin, r: C.coral, h: C.brownDark, b: C.skyLight, w: C.white, t: C.tan, L: C.brown };
+/** Aid station: striped canopy, a volunteer behind a table with water jugs and cups. */
+const AID_TENT = [
+  '.kkkkkkkkkkkkkkk.',
+  'kSWSWSWSWSWSWSWSk',
+  'kkkkkkkkkkkkkkkkk',
+  '.k.............k.',
+  '.k..hh.........k.',
+  '.k..ss..bb.ww..k.',
+  '.k.rrrr.bb.ww..k.',
+  '.kkkkkkkkkkkkkkk.',
+  '.k.L.........L.k.',
+  '.k.L.........L.k.',
+];
+
+/** Summit signboard ("GUNUNG KORBU / 2,183 M") on two posts, beside the hiker. */
+function drawSummitSign(ctx: CanvasRenderingContext2D, cp: Checkpoint, x: number, y: number, W: number) {
+  let name = cp.name.toUpperCase();
+  while (name.length > 4 && textWidth(name) > 96) name = name.slice(0, -1);
+  const ele = `${fmtInt(cp.ele)} M`;
+  const bw = Math.max(textWidth(name), textWidth(ele)) + 8;
+  const bh = 21;
+  const postH = 7;
+  // to the right of the hiker unless that runs off screen
+  let bx = x + 14;
+  if (bx + bw > W - 4) bx = x - 14 - bw;
+  const by = y - postH - bh;
+  ctx.fillStyle = C.ink;
+  ctx.fillRect(bx + 3, by + bh, 3, postH);
+  ctx.fillRect(bx + bw - 6, by + bh, 3, postH);
+  ctx.fillStyle = C.brown;
+  ctx.fillRect(bx + 4, by + bh, 1, postH);
+  ctx.fillRect(bx + bw - 5, by + bh, 1, postH);
+  panel(ctx, bx, by, bw, bh, C.cream, C.brownDark);
+  ctx.fillStyle = C.red;
+  ctx.fillRect(bx + 2, by + 2, bw - 4, 1);
+  drawText(ctx, name, bx + bw / 2, by + 4, C.wine, { align: 'center' });
+  drawText(ctx, ele, bx + bw / 2, by + 12, C.ink, { align: 'center' });
+}
+
+// ---------------------------------------------------------------- life
+
+/** Fireflies blinking around the hiker on warm, low jungle nights. */
+function drawFireflies(o: OverlayInput) {
+  const { ctx, state, sky, track } = o;
+  if (!o.env.life || o.env.scenery !== 'tropical' || sky.lamp < 0.6) return;
+  if (state.phase !== 'move' && state.phase !== 'pause') return;
+  const ele = sampleAt(track, track.ele, state.d);
+  if (ele > 1300) return;
+  const h = o.heroAt;
+  if (!h.visible) return;
+  const t = state.t;
+  for (let k = 0; k < 9; k++) {
+    const ph = k * 1.7;
+    const blink = (t * 0.9 + k * 0.37) % 1;
+    if (blink > 0.55) continue;
+    const fx = h.x + Math.sin(t * 0.6 + ph) * (18 + k * 3) + Math.sin(t * 1.7 + ph * 2) * 4;
+    const fy = h.y - 8 + Math.cos(t * 0.5 + ph * 1.3) * (9 + (k % 3) * 4);
+    if (Math.abs(fx - h.x) < 6 && fy > h.y - 17 && fy < h.y + 1) continue; // not on the hiker
+    ctx.fillStyle = blink < 0.25 ? C.lime : C.yellow;
+    ctx.fillRect(Math.round(fx), Math.round(fy), 1, 1);
+  }
+}
+
+const BIRD = [['k...k', '.k.k.'], ['.....', 'kk.kk']];
+/** A small flock crossing the sky around sunrise and sunset. */
+function drawBirds(o: OverlayInput) {
+  const { ctx, W, H, state, dial } = o;
+  if (!o.env.life || state.phase !== 'move' && state.phase !== 'pause') return;
+  if (!dial.isDay || (dial.frac > 0.07 && dial.frac < 0.93)) return;
+  const period = 9;
+  const u = (state.t % period) / 6.5; // 6.5 s to cross, then a gap
+  if (u > 1) return;
+  const baseY = W > H ? 96 : Math.round(H * 0.36); // below the checkpoint banner
+  const flock = [[0, 0], [-7, 3], [-13, -2], [-19, 4], [-25, 1]];
+  for (let i = 0; i < flock.length; i++) {
+    const [dx, dy] = flock[i];
+    const x = Math.round(-30 + u * (W + 60) + dx);
+    const y = Math.round(baseY + dy + Math.sin(u * 9 + i) * 1.5);
+    drawSprite(ctx, BIRD[Math.floor(state.t * 5 + i) % 2], x, y, { keys: { k: C.ink2 } });
+  }
 }
 
 function drawTitleCard(o: OverlayInput) {
