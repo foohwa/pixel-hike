@@ -30,3 +30,4 @@ public/samples/
 
 # checkpoint edits mirrored by the dev server (personal names/notes)
 edits/
+e2e-*

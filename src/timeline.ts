@@ -56,6 +56,7 @@ export class Timeline {
   readonly moveSeconds: number;
   private track: Track;
   private clockSamples: Float64Array | null = null;
+  private distSamples: Float64Array | null = null;
   private static readonly SAMPLE_HZ = 20;
 
   constructor(track: Track, checkpoints: Checkpoint[], duration: number, opts: { gates?: boolean } = {}) {
@@ -162,6 +163,22 @@ export class Timeline {
         return (i - 1 + (span > 0 ? (ms - cs[i - 1]) / span : 0)) / Timeline.SAMPLE_HZ;
       }
     }
+    return null;
+  }
+
+  /** First video time at which the walker reaches `d` metres (or null if never). */
+  videoTimeAtDistance(d: number): number | null {
+    if (!this.distSamples) {
+      const n = Math.ceil(this.duration * Timeline.SAMPLE_HZ) + 1;
+      this.distSamples = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        const st = this.sample(i / Timeline.SAMPLE_HZ);
+        // the intro / start arch sit at d = 0, the finish scenes at the end: only count walking
+        this.distSamples[i] = st.phase === 'move' || st.phase === 'pause' ? st.d : st.phase === 'gateStart' || st.phase === 'intro' ? -1 : Infinity;
+      }
+    }
+    const ds = this.distSamples;
+    for (let i = 0; i < ds.length; i++) if (ds[i] >= d) return i / Timeline.SAMPLE_HZ;
     return null;
   }
 

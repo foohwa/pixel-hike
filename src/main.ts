@@ -16,6 +16,7 @@ import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
   type Activity, type Checkpoint, type CheckpointKind, type Track,
 } from './track';
+import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -35,6 +36,15 @@ const ui = {
   gateColor: $<HTMLSelectElement>('gateColor'),
   gateText: $<HTMLInputElement>('gateText'),
   gateTagline: $<HTMLInputElement>('gateTagline'),
+  zonesOn: $<HTMLInputElement>('zonesOn'),
+  zoneRows: $('zoneRows'),
+  zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
+  zoneAt1: $<HTMLInputElement>('zoneAt1'),
+  zoneAt2: $<HTMLInputElement>('zoneAt2'),
+  zoneTech: $<HTMLInputElement>('zoneTech'),
+  zoneLabels: $<HTMLInputElement>('zoneLabels'),
+  zoneSummary: $('zoneSummary'),
+  zoneReset: $<HTMLButtonElement>('zoneReset'),
   activity: $('activity'),
   character: $('character'),
   gender: $('gender'),
@@ -90,6 +100,7 @@ const state = {
   customMusic: null as { name: string; buffer: AudioBuffer } | null,
   logoSource: null as LogoSource | null,
   logoSet: null as LogoSet | null,
+  zones: null as TrailZones | null,
   soundtrack: null as AudioBuffer | null,
   soundtrackKey: '',
   t: 0,
@@ -144,6 +155,8 @@ async function loadParsed(parsed: ParsedTrack) {
   let activity = guessActivity(track);
   let pins: Checkpoint[] = [];
 
+  setZoneUi(defaultZones(track));
+
   // …then whatever was saved for it last time
   // browser storage first; if it was cleared, fall back to the copy on disk (dev server)
   const saved = loadSaved(track) ?? (await loadFromDisk(track));
@@ -183,9 +196,55 @@ function gateOptions(): GateOptions | null {
   };
 }
 
+// ------------------------------------------------------------------ trail zones
+
+for (const sel of ui.zoneStyle) {
+  for (const st of ZONE_STYLES) sel.add(new Option(ZONE_LABEL[st], st));
+}
+
+function zoneSettings(): ZoneSettings {
+  const num = (el: HTMLInputElement, fallback: number) => (Number.isFinite(el.valueAsNumber) ? el.valueAsNumber : fallback);
+  const at1 = num(ui.zoneAt1, 1000);
+  const at2 = Math.max(at1, num(ui.zoneAt2, 1500));
+  return {
+    on: ui.zonesOn.checked,
+    technical: ui.zoneTech.checked,
+    labels: ui.zoneLabels.checked,
+    bands: [
+      { at: -Infinity, style: ui.zoneStyle[0].value as ZoneStyle },
+      { at: at1, style: ui.zoneStyle[1].value as ZoneStyle },
+      { at: at2, style: ui.zoneStyle[2].value as ZoneStyle },
+    ],
+  };
+}
+
+function setZoneUi(z: ZoneSettings) {
+  ui.zonesOn.checked = z.on;
+  ui.zoneTech.checked = z.technical;
+  ui.zoneLabels.checked = z.labels;
+  z.bands.forEach((b, i) => (ui.zoneStyle[i].value = b.style));
+  ui.zoneAt1.value = String(z.bands[1].at);
+  ui.zoneAt2.value = String(z.bands[2].at);
+  ui.zoneRows.classList.toggle('off', !z.on);
+}
+
+const SHORT: Record<ZoneStyle, string> = { jungle: 'jungle', forest: 'montane', mossy: 'mossy', rocky: 'rocky', meadow: 'meadow', plain: 'plain' };
+
+function renderZoneSummary() {
+  const z = state.zones, t = state.track;
+  if (!z || !t) { ui.zoneSummary.textContent = ''; return; }
+  const { km, techKm } = zoneSummary(z);
+  const parts = ZONE_STYLES.filter((s) => (km[s] ?? 0) >= 0.05).map((s) => `${SHORT[s]} ${km[s]!.toFixed(1)} km`);
+  if (z.settings.technical) parts.push(`steep ${techKm.toFixed(1)} km`);
+  ui.zoneSummary.textContent = `${Math.round(t.stats.minEle)}–${Math.round(t.stats.maxEle)} m · ${parts.join(' · ')}`;
+}
+
 function rebuild() {
   if (!state.track || !state.terrain) return;
   const gate = gateOptions();
+  state.zones = buildZones(state.track, zoneSettings());
+  ui.zoneRows.classList.toggle('off', !ui.zonesOn.checked);
+  renderZoneSummary();
   state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate });
   renderer.setData({
     track: state.track,
@@ -201,6 +260,7 @@ function rebuild() {
       ? { set: state.logoSet, intro: ui.logoIntro.checked, badge: ui.logoBadge.checked, outro: ui.logoOutro.checked }
       : null,
     gate,
+    zones: state.zones,
   });
   state.t = Math.min(state.t, state.timeline.duration);
   ui.durLabel.textContent = `${ui.duration.value}s`;
@@ -306,6 +366,14 @@ function collectSettings() {
     gateColor: ui.gateColor.value,
     gateText: ui.gateText.value,
     gateTagline: ui.gateTagline.value,
+    zonesOn: ui.zonesOn.checked,
+    zoneStyle0: ui.zoneStyle[0].value,
+    zoneStyle1: ui.zoneStyle[1].value,
+    zoneStyle2: ui.zoneStyle[2].value,
+    zoneAt1: zoneSettings().bands[1].at,
+    zoneAt2: zoneSettings().bands[2].at,
+    zoneTech: ui.zoneTech.checked,
+    zoneLabels: ui.zoneLabels.checked,
   };
 }
 
@@ -329,6 +397,15 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateColor === 'string') ui.gateColor.value = s.gateColor;
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
+  for (const [k, el] of [['zonesOn', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
+    if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
+  }
+  ui.zoneStyle.forEach((el, i) => {
+    const v = s[`zoneStyle${i}`];
+    if (typeof v === 'string' && (ZONE_STYLES as string[]).includes(v)) el.value = v;
+  });
+  if (typeof s.zoneAt1 === 'number') ui.zoneAt1.value = String(s.zoneAt1);
+  if (typeof s.zoneAt2 === 'number') ui.zoneAt2.value = String(s.zoneAt2);
   if ('logo' in s) {
     const url = typeof s.logo === 'string' ? s.logo : null;
     if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
@@ -662,6 +739,12 @@ ui.logoColors.onchange = () => void setLogo(state.logoSource);
 for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
 ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
+for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
+ui.zoneReset.onclick = () => {
+  if (!state.track) return;
+  setZoneUi(defaultZones(state.track));
+  rebuild();
+};
 
 ui.sheet.onchange = async () => {
   const f = ui.sheet.files?.[0];
@@ -879,6 +962,8 @@ Object.assign(window, {
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
     },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
+    setZones(z: Partial<ZoneSettings>) { setZoneUi({ ...zoneSettings(), ...z }); rebuild(); },
+    zones() { return state.zones && { runs: state.zones.runs, tech: state.zones.tech, summary: ui.zoneSummary.textContent }; },
     forgetSaved() { if (state.track) forget(state.track); },
     sheetDataUrl(c: CharacterId, scale = 1, guides = false, g: Gender = 'male') { return renderSheet(builtInSet(c, g), scale, guides).toDataURL('image/png'); },
     get duration() { return state.timeline?.duration ?? 0; },

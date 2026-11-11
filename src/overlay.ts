@@ -7,8 +7,18 @@ import type { SkyState } from './sky';
 import { AID, CAMPFIRE, drawFlag, drawMoon, drawSprite, HEART, MOON, MOUNTAIN, STOPWATCH, SUN, TENT, THERMO } from './sprites';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { DECOR_KEYS, WARN_SIGN, ZONE_COLOR, type TrailZones } from './zones';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
+
+/** A trail-side prop, bottom-centre at (x, y). `lit` = inside the head-lamp's glow. */
+export interface DecorItem { x: number; y: number; rows: string[]; lit: boolean }
+export interface DecorFrame {
+  items: DecorItem[];
+  /** Fixed ropes beside technical stretches (screen polylines at ground level). */
+  ropes: { x: number; y: number }[][];
+  signs: DecorItem[];
+}
 
 export interface DialState {
   isDay: boolean;
@@ -42,6 +52,9 @@ export interface OverlayInput {
   logo: EventLogo | null;
   /** Start/finish arch scenes + mini arches on the map, or null. */
   gate: GateOptions | null;
+  zones: TrailZones | null;
+  /** Props along the trail for this frame (see PixelRenderer.decorFrame), or null. */
+  decor: DecorFrame | null;
 }
 
 export interface EventLogo {
@@ -115,9 +128,47 @@ export function pickAnim(o: Pick<OverlayInput, 'state' | 'track' | 'activity' | 
 
 // ---------------------------------------------------------------- world sprites
 
+function pixLine(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  for (let i = 0; i <= n; i++) {
+    const f = n ? i / n : 0;
+    ctx.fillRect(Math.round(x0 + (x1 - x0) * f), Math.round(y0 + (y1 - y0) * f), 1, 1);
+  }
+}
+
+function drawDecor(o: OverlayInput) {
+  const dec = o.decor;
+  if (!dec) return;
+  const { ctx } = o;
+  const night = o.sky.lamp > 0.5;
+  const keys = (lit: boolean) => (night && !lit ? DECOR_KEYS.night : DECOR_KEYS.day);
+  for (const it of dec.items) drawSprite(ctx, it.rows, it.x, it.y + 1, { keys: keys(it.lit) });
+
+  // fixed ropes: posts every other point, rope sagging between post tops
+  for (const line of dec.ropes) {
+    ctx.fillStyle = night ? C.coral : C.orange;
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1], b = line[i];
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 2; // a little sag below the 3-px posts
+      pixLine(ctx, a.x, a.y - 3, mx, my);
+      pixLine(ctx, mx, my, b.x, b.y - 3);
+    }
+    line.forEach((p, i) => {
+      if (i % 2) return;
+      ctx.fillStyle = night ? C.ink2 : C.brownDark;
+      ctx.fillRect(p.x, p.y - 3, 1, 4);
+      ctx.fillStyle = night ? C.rockDark : C.tan;
+      ctx.fillRect(p.x, p.y - 4, 1, 1);
+    });
+  }
+  for (const s of dec.signs) drawSprite(ctx, WARN_SIGN, s.x, s.y + 1, { keys: keys(true) });
+}
+
 function drawWorldSprites(o: OverlayInput) {
   const { ctx, state, timeline } = o;
   const t = state.t;
+
+  drawDecor(o);
 
   for (const cp of o.checkpoints) {
     if (!cp.enabled) continue;
@@ -377,13 +428,17 @@ function drawProfile(o: OverlayInput) {
   const range = Math.max(1, maxEle - minEle);
   const cur = Math.round((state.d / distance) * (iw - 1));
   const hAt = (c: number) => 1 + Math.round(((cols[clamp(c, 0, iw - 1)] - minEle) / range) * (ph - 3));
+  const z = o.zones?.settings.on ? o.zones : null;
   for (let c = 0; c < iw; c++) {
     const hgt = hAt(c);
     const x = x0 + 2 + c;
     const yb = y0 + 1 + ph;
-    ctx.fillStyle = c <= cur ? C.green : C.rockDark;
+    const dc = (c / (iw - 1)) * distance;
+    // zones colour the walked part; ahead stays grey with a zone-coloured ridge line
+    const [fill, top] = z ? ZONE_COLOR[z.styleAt(dc)] : [C.green, C.lime];
+    ctx.fillStyle = c <= cur ? fill : C.rockDark;
     ctx.fillRect(x, yb - hgt, 1, hgt);
-    ctx.fillStyle = c <= cur ? C.lime : C.rock;
+    ctx.fillStyle = z?.techAt(dc) ? C.orange : c <= cur ? top : z ? fill : C.rock;
     ctx.fillRect(x, yb - hgt, 1, 1);
   }
   for (const cp of o.checkpoints) {

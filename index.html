@@ -73,6 +73,24 @@
         </div>
 
         <div class="field">
+          <span>Trail zones</span>
+          <label class="check"><input type="checkbox" id="zonesOn" checked /> Decorate the trail by elevation</label>
+          <div class="zones" id="zoneRows">
+            <div class="zrow"><em>Low</em><span class="from">from the bottom</span><select id="zoneStyle0"></select></div>
+            <div class="zrow"><em>Mid</em><label class="from">from <input type="number" id="zoneAt1" step="50" min="0" max="9000" /> m</label><select id="zoneStyle1"></select></div>
+            <div class="zrow"><em>High</em><label class="from">from <input type="number" id="zoneAt2" step="50" min="0" max="9000" /> m</label><select id="zoneStyle2"></select></div>
+          </div>
+          <div class="row small">
+            <label class="check" title="Fixed ropes, roots and rock steps where the trail is steeper than ~28%"><input type="checkbox" id="zoneTech" checked /> Ropes &amp; roots on steep bits</label>
+            <label class="check"><input type="checkbox" id="zoneLabels" checked /> Zone names</label>
+          </div>
+          <div class="row small">
+            <small id="zoneSummary" class="hint"></small>
+            <button id="zoneReset" class="mini" title="Back to the suggested heights for this track">Reset</button>
+          </div>
+        </div>
+
+        <div class="field">
           <span>Character</span>
           <div class="seg" id="character">
             <button data-v="hiker" class="on">Hiker</button>

@@ -4,12 +4,13 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
 import type { GateOptions } from './gate';
-import { clockText, drawOverlay, type DialState, type EventLogo, type ScreenPoint } from './overlay';
+import { clockText, drawOverlay, type DecorFrame, type DecorItem, type DialState, type EventLogo, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Terrain } from './terrain';
-import type { Timeline } from './timeline';
+import type { Timeline, TimelineState } from './timeline';
 import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
@@ -32,6 +33,8 @@ export interface SceneData {
   pet: SpriteSet | null;
   logo: EventLogo | null;
   gate: GateOptions | null;
+  /** Elevation zones + technical stretches used to dress the trail, or null. */
+  zones: TrailZones | null;
 }
 
 interface Rig {
@@ -207,6 +210,18 @@ export class PixelRenderer {
       if (t == null || t < data.timeline.gateIn + data.timeline.intro) continue;
       this.toasts.push({ text: `${ev.kind === 'sunrise' ? 'SUNRISE' : 'SUNSET'} ${clockText(ev.ms, data.tzOffsetMin)}`, t });
     }
+    const z = data.zones;
+    if (z?.settings.on && z.settings.labels) {
+      for (const run of z.runs) {
+        if (run.style === 'plain') continue;
+        const t = data.timeline.videoTimeAtDistance(run.d0);
+        if (t == null) continue;
+        this.toasts.push({ text: ZONE_LABEL[run.style].toUpperCase(), t: Math.max(t, data.timeline.gateIn + data.timeline.intro) });
+      }
+    }
+    // one toast at a time: nudge later ones so they don't overlap
+    this.toasts.sort((a, b) => a.t - b.t);
+    for (let i = 1; i < this.toasts.length; i++) this.toasts[i].t = Math.max(this.toasts[i].t, this.toasts[i - 1].t + 2.4);
   }
 
   private dialAt(ms: number): DialState {
@@ -454,6 +469,8 @@ export class PixelRenderer {
       cpScreen.set(cp.id, this.project(x, terrain.worldY(x, z), z));
     }
 
+    const decor = this.decorFrame(st, hiker);
+
     const petAt = this.data.pet
       ? { x: hiker.x + (this.facingLeft ? 11 : -11), y: hiker.y + 1, visible: hiker.visible }
       : null;
@@ -481,6 +498,8 @@ export class PixelRenderer {
       showMinimap: this.showMinimap,
       logo: this.data.logo,
       gate: this.data.gate,
+      zones: this.data.zones,
+      decor,
     });
     this.overlayTex.needsUpdate = true;
 
@@ -502,12 +521,120 @@ export class PixelRenderer {
   }
 
   private project(x: number, y: number, z: number): ScreenPoint {
-    const v = new THREE.Vector3(x, y, z).project(this.camera);
-    return {
-      x: Math.round(((v.x + 1) / 2) * this.W),
-      y: Math.round(((1 - v.y) / 2) * this.H),
-      visible: v.z < 1 && v.z > -1,
+    const p = this.projectF(x, y, z);
+    return { x: Math.round(p.x), y: Math.round(p.y), visible: p.visible };
+  }
+
+  private projectF(x: number, y: number, z: number): ScreenPoint {
+    const v = this.tmp.set(x, y, z).project(this.camera);
+    return { x: ((v.x + 1) / 2) * this.W, y: ((1 - v.y) / 2) * this.H, visible: v.z < 1 && v.z > -1 };
+  }
+
+  private tmp = new THREE.Vector3();
+
+  /** True when a ridge sits between the camera and the point (cheap ray march over the height field). */
+  private occluded(x: number, y: number, z: number) {
+    const c = this.camera.position, t = this.data!.terrain;
+    const ty = y + t.spacing * 0.15;
+    for (let s = 1; s < 10; s++) {
+      const f = s / 10;
+      const px = c.x + (x - c.x) * f, pz = c.z + (z - c.z) * f;
+      if (t.worldY(px, pz) > c.y + (ty - c.y) * f) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Props along the trail for this frame: ferns / moss / boulders by elevation zone, roots and rock
+   * steps on steep ground, fixed ropes beside technical stretches and a warning sign where one starts.
+   * Placed at fixed track distances (so they don't swim) and offset sideways in screen pixels so they
+   * stay readable at any zoom.
+   */
+  private decorFrame(st: TimelineState, hero: ScreenPoint): DecorFrame | null {
+    const zones = this.data!.zones;
+    if (!zones || !zones.settings.on) return null;
+    if (st.phase !== 'move' && st.phase !== 'pause') return null;
+    const { track, terrain } = this.data!;
+    const r = this.rig!;
+    const is2d = this.mode === '2d';
+    const L = track.stats.distance;
+    const sp = r.camDist * 0.03;
+    const back = is2d ? 3.2 : 1.1, fwd = is2d ? 3.2 : 2.8; // the top-down view shows more trail behind
+    const d0 = Math.max(0, st.d - r.camDist * back), d1 = Math.min(L, st.d + r.camDist * fwd);
+    const cam = this.camera.position;
+    const W = this.W, H = this.H;
+
+    const world = (d: number) => {
+      const x = sampleAt(track, track.x, d), z = sampleAt(track, track.z, d);
+      return { x, y: terrain.worldY(x, z), z };
     };
+    /** Screen position, unit tangent (direction of travel) and distance factor at track distance d. */
+    const frame = (d: number) => {
+      const w = world(d);
+      const p = this.projectF(w.x, w.y, w.z);
+      if (!p.visible || p.x < -12 || p.x > W + 12 || p.y < -12 || p.y > H + 12) return null;
+      if (!is2d && this.occluded(w.x, w.y, w.z)) return null;
+      const w2 = world(Math.min(L, d + sp * 0.4));
+      const p2 = this.projectF(w2.x, w2.y, w2.z);
+      let tx = p2.x - p.x, ty = p2.y - p.y;
+      const len = Math.hypot(tx, ty);
+      if (len < 1e-3) { tx = 1; ty = 0; } else { tx /= len; ty /= len; }
+      const q = is2d ? 1 : Math.hypot(w.x - cam.x, w.y - cam.y, w.z - cam.z) / r.camDist;
+      return { x: p.x, y: p.y, tx, ty, q };
+    };
+
+    const items: DecorItem[] = [];
+    for (let k = Math.ceil(d0 / sp); k * sp <= d1; k++) {
+      const rnd = rng(k + 1);
+      const dk = k * sp;
+      const style = zones.styleAt(dk);
+      const tech = zones.techAt(dk);
+      const count = Math.floor(decorDensity(style) + rnd()) + (tech ? 1 : 0);
+      for (let j = 0; j < count; j++) {
+        const onTrail = tech && j === count - 1;
+        const dd = clamp(dk + (rnd() - 0.5) * sp, 0, L);
+        const side = rnd() < 0.5 ? -1 : 1, off = rnd(), pick = rnd();
+        // keep the patch right around the walker clear so the sprite stays readable
+        if (Math.abs(dd - st.d) < sp * 0.6) continue;
+        const f = frame(dd);
+        if (!f || f.q > 3.2) continue;
+        const far = f.q > 1.8;
+        const rows = onTrail ? techSprite(pick) : decorSprite(style, pick, far);
+        if (!rows) continue;
+        const o = onTrail ? (off - 0.5) * 2 : (5 + off * 12) / Math.max(0.75, f.q);
+        items.push({
+          x: Math.round(f.x - f.ty * side * o),
+          y: Math.round(f.y + f.tx * side * o),
+          rows,
+          lit: Math.hypot(f.x - hero.x, f.y - hero.y) < 30,
+        });
+      }
+    }
+
+    // fixed ropes + warning signs
+    const ropes: DecorFrame['ropes'] = [];
+    const signs: DecorItem[] = [];
+    for (const run of zones.tech) {
+      if (run.d1 < d0 || run.d0 > d1) continue;
+      let line: { x: number; y: number }[] = [];
+      const a = Math.max(run.d0, d0), b = Math.min(run.d1, d1);
+      for (let d = a; d <= b + 1e-6; d += sp * 0.5) {
+        const f = frame(d);
+        if (!f) { if (line.length > 1) ropes.push(line); line = []; continue; }
+        const o = 6 / Math.max(0.75, f.q);
+        line.push({ x: Math.round(f.x + f.ty * o), y: Math.round(f.y - f.tx * o) });
+      }
+      if (line.length > 1) ropes.push(line);
+      if (run.d1 - run.d0 >= 150 && run.d0 >= d0) {
+        const f = frame(run.d0);
+        if (f && f.q < 2.4) {
+          const o = 10 / Math.max(0.75, f.q);
+          signs.push({ x: Math.round(f.x - f.ty * o), y: Math.round(f.y + f.tx * o), rows: [], lit: Math.hypot(f.x - hero.x, f.y - hero.y) < 30 });
+        }
+      }
+    }
+    items.sort((p, q) => p.y - q.y);
+    return { items, ropes, signs };
   }
 }
 
