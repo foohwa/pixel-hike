@@ -49,6 +49,8 @@ export interface EnvOptions {
   signs: boolean;
   /** Leg splits on checkpoint banners + "next checkpoint" line. */
   splits: boolean;
+  /** Ridges cast shadows from the real sun; nights lit by the real moon (position + phase). */
+  light: boolean;
 }
 
 interface Rig {
@@ -458,9 +460,9 @@ export class PixelRenderer {
     // ---- sky / light
     const ms = st.clockMs;
     const sky = skyAt(ms, track.lat0, track.lon0);
-    shared.uSunDir.value.set(...sky.lightDir);
-    shared.uSunCol.value.setRGB(...sky.sunColor);
-    shared.uAmb.value.setRGB(...sky.ambient);
+    const sp = sunPosition(ms, track.lat0, track.lon0);
+    const mp = moonPosition(ms, track.lat0, track.lon0);
+    this.applyLight(sky, sp, mp, ms);
     shared.uFogCol.value.setRGB(...sky.bottom);
     const fogNear = is2d ? 1e9 : r.camDist * 2.6;
     const fogFar = is2d ? 2e9 : r.camDist * 10;
@@ -551,8 +553,6 @@ export class PixelRenderer {
     pu.uSkyBot.value.set(...sky.bottom);
     pu.uStars.value = sky.stars;
     pu.uTime.value = st.t;
-    const sp = sunPosition(ms, track.lat0, track.lon0);
-    const mp = moonPosition(ms, track.lat0, track.lon0);
     this.skyPoint(sp.azimuth, sp.elevation, pu.uSun.value);
     this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
     if (pu.uSun.value.z > 0.5) pu.uMoon.value.z = 0; // keep it simple: one disc at a time
@@ -585,6 +585,63 @@ export class PixelRenderer {
 
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
+
+  /**
+   * Light for this moment. By default: the sky ramp's colours from the sun's real direction (kept
+   * ≥ 18° up so slopes read). With `env.light`: ridges cast shadows along the real, unclamped sun
+   * direction (so at dawn the peaks light up first and evenings get long valley shadows), and at
+   * night the light comes from the real moon, as bright as its phase — darker when it's down.
+   */
+  private applyLight(
+    sky: ReturnType<typeof skyAt>,
+    sp: { azimuth: number; elevation: number },
+    mp: { azimuth: number; elevation: number },
+    ms: number,
+  ) {
+    const { terrain, env } = this.data!;
+    const dir = (az: number, el: number): [number, number, number] =>
+      [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)];
+    let ld = [...sky.lightDir] as [number, number, number];
+    let col = [...sky.sunColor] as [number, number, number];
+    let amb = [...sky.ambient] as [number, number, number];
+    shared.uShadow.value = 0;
+    if (env.light) {
+      const sunDeg = (sp.elevation * 180) / Math.PI;
+      const night = clamp((-sunDeg - 4) / 6, 0, 1); // 0 above -4°, 1 below -10°
+      const moonUp = mp.elevation > 0.03;
+      const phase = moonPhase(ms);
+      const illum = (1 - Math.cos(2 * Math.PI * phase)) / 2; // 0 new … 1 full
+      if (night > 0) {
+        // moonlight strength: bright under a high full moon, starlight only when it's down / new
+        const k = moonUp ? 0.35 + 0.85 * illum * clamp(mp.elevation / 0.35, 0.3, 1) : 0.3;
+        const ka = moonUp ? 0.8 + 0.25 * illum : 0.75;
+        col = col.map((v) => v * (1 + (k - 1) * night)) as typeof col;
+        amb = amb.map((v) => v * (1 + (ka - 1) * night)) as typeof amb;
+        if (moonUp) {
+          const md = dir(mp.azimuth, Math.max(mp.elevation, (18 * Math.PI) / 180));
+          ld = ld.map((v, i) => v + (md[i] - v) * night) as typeof ld;
+          const l = Math.hypot(...ld);
+          ld = ld.map((v) => v / l) as typeof ld;
+        }
+      }
+      // shadows follow the body that's actually lighting the scene; ≥ 1° so dawn light grazes the peaks
+      const useMoon = night > 0.5;
+      const body = useMoon ? mp : sp;
+      if (!useMoon || (moonUp && illum > 0.25)) {
+        shared.uShadowDir.value.set(...dir(body.azimuth, Math.max(body.elevation, Math.PI / 180)));
+        shared.uShadow.value = useMoon ? 0.7 : sunDeg > -6 ? 1 : 0;
+      }
+      const sm = terrain.shadowMap;
+      shared.uHMap.value = sm.tex;
+      shared.uHOrigin.value.copy(sm.origin);
+      shared.uHSize.value.copy(sm.size);
+      shared.uHMax.value = sm.maxY;
+      shared.uHStep.value = sm.step;
+    }
+    shared.uSunDir.value.set(...ld);
+    shared.uSunCol.value.setRGB(...col);
+    shared.uAmb.value.setRGB(...amb);
+  }
 
   /** Mist thickness by time of day: thick around sunrise, light by day, medium at night. */
   private mistAt(ms: number) {

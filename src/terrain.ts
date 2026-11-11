@@ -42,6 +42,15 @@ export const shared = {
   uCloud: { value: 0 },
   uCloudScale: { value: 1500 },
   uWind: { value: new THREE.Vector2(40, 12) },
+  /** Height map (world Y) for cast shadows: ridges block the sun / moon. */
+  uHMap: { value: null as THREE.Texture | null },
+  uHOrigin: { value: new THREE.Vector2() },
+  uHSize: { value: new THREE.Vector2(1, 1) },
+  uHMax: { value: 0 },
+  uHStep: { value: 10 },
+  /** Real direction of the light that casts shadows (sun, or moon at night); uShadow 0 = off. */
+  uShadowDir: { value: new THREE.Vector3(0, 1, 0) },
+  uShadow: { value: 0 },
 };
 
 const LIGHT_GLSL = /* glsl */ `
@@ -50,6 +59,22 @@ uniform vec3 uFogCol; uniform float uFogNear; uniform float uFogFar;
 uniform vec3 uLampPos; uniform float uLamp; uniform float uLampR;
 uniform vec2 uLampDir; uniform float uBeam;
 uniform float uTime; uniform float uCloud; uniform float uCloudScale; uniform vec2 uWind;
+uniform sampler2D uHMap; uniform vec2 uHOrigin; uniform vec2 uHSize; uniform float uHMax; uniform float uHStep;
+uniform vec3 uShadowDir; uniform float uShadow;
+/** 0 when terrain between this point and the light blocks it. */
+float lightVisible(vec3 w) {
+  if (uShadow <= 0.0) return 1.0;
+  vec3 p = w + vec3(0.0, uHStep * 0.25, 0.0);
+  for (int i = 1; i <= 30; i++) {
+    float fi = float(i);
+    vec3 q = p + uShadowDir * (fi + fi * fi * 0.3) * uHStep;
+    if (q.y > uHMax) return 1.0;
+    vec2 uv = (q.xz - uHOrigin) / uHSize;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
+    if (texture2D(uHMap, uv).r > q.y) return 0.0;
+  }
+  return 1.0;
+}
 float vnoise(vec2 p) {
   vec2 i = floor(p), f = fract(p);
   f = f * f * (3.0 - 2.0 * f);
@@ -63,6 +88,8 @@ float fbm(vec2 p) { return vnoise(p) * 0.6 + vnoise(p * 2.03 + 7.1) * 0.3 + vnoi
 vec3 shade(vec3 base, vec3 n, vec3 w) {
   float d = max(dot(n, uSunDir), 0.0);
   d = floor(d * 4.0 + 0.5) / 4.0;                 // toon steps
+  // cast shadows from ridges (long and dramatic when the sun is low)
+  if (d > 0.0 && uShadow > 0.0) d *= 1.0 - uShadow * (1.0 - lightVisible(w));
   // drifting cloud shadows (hard-edged so they stay pixel-crisp)
   if (uCloud > 0.0) {
     float cs = fbm((w.xz - uWind * uTime) / uCloudScale);
@@ -90,6 +117,7 @@ export interface Terrain {
   scenery: Scenery;
   /** Mist layer controls: uMist strength 0..1, uMistClear = radius kept clear around the hiker. */
   mist: { uMist: { value: number }; uMistClear: { value: number } };
+  shadowMap: { tex: THREE.Texture; origin: THREE.Vector2; size: THREE.Vector2; maxY: number; step: number };
   /** Surface height in metres (not exaggerated) at local x/z. */
   heightAt(x: number, z: number): number;
   /** World Y (exaggerated) at local x/z. */
@@ -150,6 +178,22 @@ export function buildTerrain(track: Track, dem: Dem | null, scenery: Scenery = '
   const worldY = (x: number, z: number) => heightAt(x, z) * EXAG;
 
   const group = new THREE.Group();
+
+  // --- height map for cast shadows (half-float so it filters smoothly) ---
+  const hData = new Uint16Array(nx * nz);
+  for (let k = 0; k < hData.length; k++) hData[k] = THREE.DataUtils.toHalfFloat(H[k] * EXAG);
+  const hmap = new THREE.DataTexture(hData, nx, nz, THREE.RedFormat, THREE.HalfFloatType);
+  hmap.minFilter = hmap.magFilter = THREE.LinearFilter;
+  hmap.wrapS = hmap.wrapT = THREE.ClampToEdgeWrapping;
+  hmap.needsUpdate = true;
+  const shadowMap = {
+    tex: hmap as THREE.Texture,
+    // texel centres: uv 0..1 spans x0 - s/2 .. x0 + (nx - 1) s + s/2
+    origin: new THREE.Vector2(x0 - spacing / 2, z0 - spacing / 2),
+    size: new THREE.Vector2(nx * spacing, nz * spacing),
+    maxY: maxH * EXAG,
+    step: spacing * 0.6,
+  };
 
   // --- terrain mesh ---
   const pos = new Float32Array(nx * nz * 3);
@@ -281,6 +325,7 @@ export function buildTerrain(track: Track, dem: Dem | null, scenery: Scenery = '
     group,
     scenery,
     mist,
+    shadowMap,
     heightAt,
     worldY,
     center,
@@ -294,6 +339,7 @@ export function buildTerrain(track: Track, dem: Dem | null, scenery: Scenery = '
         m.geometry?.dispose();
         (m.material as THREE.Material | undefined)?.dispose?.();
       });
+      hmap.dispose();
     },
   };
 }

@@ -43,6 +43,7 @@ const ui = {
   envLife: $<HTMLInputElement>('envLife'),
   envSigns: $<HTMLInputElement>('envSigns'),
   envSplits: $<HTMLInputElement>('envSplits'),
+  envLight: $<HTMLInputElement>('envLight'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
   zoneRows: $('zoneRows'),
   zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
@@ -283,6 +284,7 @@ function rebuild() {
       life: ui.envLife.checked,
       signs: ui.envSigns.checked,
       splits: ui.envSplits.checked,
+      light: ui.envLight.checked,
     },
   });
   state.t = Math.min(state.t, state.timeline.duration);
@@ -497,6 +499,7 @@ function collectSettings() {
     envLife: ui.envLife.checked,
     envSigns: ui.envSigns.checked,
     envSplits: ui.envSplits.checked,
+    envLight: ui.envLight.checked,
     zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
@@ -531,7 +534,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
   if (s.scenery === 'auto' || s.scenery === 'tropical' || s.scenery === 'alpine' || s.scenery === 'classic') ui.scenery.value = s.scenery;
-  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits]] as const) {
+  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
@@ -876,7 +879,7 @@ ui.logoColors.onchange = () => void setLogo(state.logoSource);
 for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
 ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
-for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits]) el.onchange = () => rebuild();
+for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits, ui.envLight]) el.onchange = () => rebuild();
 for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
 ui.zoneReset.onclick = () => {
   if (!state.track) return;
@@ -1101,7 +1104,8 @@ Object.assign(window, {
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
     },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
-    setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean }) {
+    setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean; light?: boolean }) {
+      if (e.light != null) ui.envLight.checked = e.light;
       if (e.scenery) ui.scenery.value = e.scenery;
       if (e.clouds != null) ui.envClouds.checked = e.clouds;
       if (e.life != null) ui.envLife.checked = e.life;
