@@ -3,7 +3,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
-import { clockText, drawOverlay, type DialState, type ScreenPoint } from './overlay';
+import { clockText, drawOverlay, type DialState, type EventLogo, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Terrain } from './terrain';
@@ -29,6 +29,7 @@ export interface SceneData {
   activity: Activity;
   hero: SpriteSet;
   pet: SpriteSet | null;
+  logo: EventLogo | null;
 }
 
 interface Rig {
@@ -474,6 +475,7 @@ export class PixelRenderer {
       petFacingLeft: this.facingLeft,
       cpScreen,
       showMinimap: this.showMinimap,
+      logo: this.data.logo,
     });
     this.overlayTex.needsUpdate = true;
 

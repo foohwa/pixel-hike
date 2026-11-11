@@ -26,6 +26,24 @@
         </div>
 
         <div class="field">
+          <span>Event logo</span>
+          <div class="row small">
+            <label class="link">Add logo image&hellip;<input type="file" id="logoFile" accept="image/*" hidden /></label>
+            <canvas id="logoPreview" width="1" height="1" hidden></canvas>
+            <button id="logoRemove" class="mini" hidden>Remove</button>
+          </div>
+          <div class="row small" id="logoOpts" hidden>
+            <label class="check"><input type="checkbox" id="logoIntro" checked /> Intro</label>
+            <label class="check"><input type="checkbox" id="logoBadge" checked /> Corner</label>
+            <label class="check"><input type="checkbox" id="logoOutro" checked /> Finish</label>
+            <select id="logoColors" title="Keep the logo's own colours, or snap them to the game palette">
+              <option value="logo">Logo colours</option>
+              <option value="palette">Game palette</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
           <span>Activity</span>
           <div class="seg" id="activity">
             <button data-v="hike" class="on">Hike</button>

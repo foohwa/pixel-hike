@@ -5,6 +5,7 @@ import { loadDem } from './dem';
 import { exportMp4 } from './export';
 import { parseFit } from './fit';
 import { parseGpx, type ParsedTrack } from './gpx';
+import { LogoSet, prepareLogo, type LogoColors, type LogoSource } from './logo';
 import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
@@ -21,6 +22,14 @@ const ui = {
   drop: $('drop'),
   file: $<HTMLInputElement>('file'),
   title: $<HTMLInputElement>('title'),
+  logoFile: $<HTMLInputElement>('logoFile'),
+  logoPreview: $<HTMLCanvasElement>('logoPreview'),
+  logoRemove: $<HTMLButtonElement>('logoRemove'),
+  logoOpts: $('logoOpts'),
+  logoIntro: $<HTMLInputElement>('logoIntro'),
+  logoBadge: $<HTMLInputElement>('logoBadge'),
+  logoOutro: $<HTMLInputElement>('logoOutro'),
+  logoColors: $<HTMLSelectElement>('logoColors'),
   activity: $('activity'),
   character: $('character'),
   gender: $('gender'),
@@ -74,6 +83,8 @@ const state = {
   companion: null as CharacterId | null,
   customSheet: null as SpriteSet | null,
   customMusic: null as { name: string; buffer: AudioBuffer } | null,
+  logoSource: null as LogoSource | null,
+  logoSet: null as LogoSet | null,
   soundtrack: null as AudioBuffer | null,
   soundtrackKey: '',
   t: 0,
@@ -170,6 +181,9 @@ function rebuild() {
     activity: state.activity,
     hero: heroSet(),
     pet: state.companion ? builtInSet(state.companion) : null,
+    logo: state.logoSet
+      ? { set: state.logoSet, intro: ui.logoIntro.checked, badge: ui.logoBadge.checked, outro: ui.logoOutro.checked }
+      : null,
   });
   state.t = Math.min(state.t, state.timeline.duration);
   ui.durLabel.textContent = `${ui.duration.value}s`;
@@ -266,6 +280,11 @@ function collectSettings() {
     tz: Number(ui.tz.value),
     music: ui.music.value === 'custom' ? 'auto' : ui.music.value, // uploaded files aren't stored
     volume: Number(ui.volume.value),
+    logo: state.logoSource?.dataUrl ?? null, // small, background-free PNG
+    logoIntro: ui.logoIntro.checked,
+    logoBadge: ui.logoBadge.checked,
+    logoOutro: ui.logoOutro.checked,
+    logoColors: ui.logoColors.value,
   };
 }
 
@@ -281,6 +300,32 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.tz === 'number') ui.tz.value = String(s.tz);
   if (typeof s.music === 'string') ui.music.value = s.music;
   if (typeof s.volume === 'number') ui.volume.value = String(s.volume);
+  for (const [k, el] of [['logoIntro', ui.logoIntro], ['logoBadge', ui.logoBadge], ['logoOutro', ui.logoOutro]] as const) {
+    if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
+  }
+  if (s.logoColors === 'logo' || s.logoColors === 'palette') ui.logoColors.value = s.logoColors;
+  if ('logo' in s) {
+    const url = typeof s.logo === 'string' ? s.logo : null;
+    if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
+  }
+}
+
+// ------------------------------------------------------------------ event logo
+
+async function setLogo(src: LogoSource | null) {
+  state.logoSource = src;
+  state.logoSet = src ? await LogoSet.load(src, ui.logoColors.value as LogoColors) : null;
+  ui.logoOpts.hidden = ui.logoRemove.hidden = ui.logoPreview.hidden = !state.logoSet;
+  if (state.logoSet) {
+    const img = state.logoSet.get(32);
+    ui.logoPreview.width = img.width;
+    ui.logoPreview.height = img.height;
+    const ctx = ui.logoPreview.getContext('2d')!;
+    ctx.clearRect(0, 0, img.width, img.height);
+    ctx.drawImage(img, 0, 0);
+    ui.logoPreview.style.width = `${img.width * 2}px`;
+  }
+  rebuild();
 }
 
 // ------------------------------------------------------------------ music
@@ -576,6 +621,21 @@ ui.musicFile.onchange = async () => {
   ui.musicFile.value = '';
 };
 
+ui.logoFile.onchange = async () => {
+  const f = ui.logoFile.files?.[0];
+  ui.logoFile.value = '';
+  if (!f) return;
+  try {
+    await setLogo(await prepareLogo(f));
+  } catch (e) {
+    setStatus((e as Error).message || 'Could not read that image.', true);
+    setTimeout(() => setStatus(''), 3000);
+  }
+};
+ui.logoRemove.onclick = () => void setLogo(null);
+ui.logoColors.onchange = () => void setLogo(state.logoSource);
+for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
+
 ui.sheet.onchange = async () => {
   const f = ui.sheet.files?.[0];
   if (!f) return;
@@ -784,6 +844,10 @@ Object.assign(window, {
     setCharacter(c: CharacterId) { setCharacter(c); },
     setGender(g: Gender) { state.gender = g; setSeg(ui.gender, g); rebuild(); },
     setCompanion(c: CharacterId | null) { state.companion = c; ui.companion.value = c ?? ''; rebuild(); },
+    async setLogoFromUrl(url: string, colors: LogoColors = 'logo') {
+      ui.logoColors.value = colors;
+      await setLogo(await prepareLogo(await (await fetch(url)).blob()));
+    },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
     forgetSaved() { if (state.track) forget(state.track); },
     sheetDataUrl(c: CharacterId, scale = 1, guides = false, g: Gender = 'male') { return renderSheet(builtInSet(c, g), scale, guides).toDataURL('image/png'); },

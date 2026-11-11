@@ -8,6 +8,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **Checkpoints** — summit, other peaks (by prominence), rests, campsites, aid stations, viewpoints and finish. Auto-detected; rename, change type, delete, or add your own at the current scrub position.
 - **Characters** — Hiker, Runner, Dog or Cat, each male or female, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
 - **Day & night** — sun and moon positions (and the real moon phase) are computed from your GPS + timestamps: sky colours, stars, a head-lamp at night, a little sun/moon dial, and SUNRISE / SUNSET pop-ups.
+- **Event logo** — upload a race/event logo: its flat background is removed and it's re-drawn on an exact pixel grid (dominant colour per cell, 2–6 colours or the game palette). Shown on the intro card, as a corner badge and on the finish card; saved with your edits.
 - **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
 - **Music** — four bundled CC0 chiptunes by Juhani Junkala (auto-picked per activity), or your own file. Looped to the video length with a fade-out, played in the preview and muxed into the MP4 as AAC. Credits in [`public/music/CREDITS.md`](public/music/CREDITS.md).
 - **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset edits* forgets them.
@@ -47,6 +48,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/sprites.ts`, `src/font.ts` | Props/HUD icons (flags, tent, campfire, aid station, moon phase) and a 5×7 bitmap font |
 | `src/export.ts` | Deterministic frame-by-frame render → WebCodecs H.264 (+ AAC audio) → MP4 (mp4-muxer) |
 | `src/audio.ts` | Bundled tracks, soundtrack rendering (OfflineAudioContext loop + fades), preview player / clock |
+| `src/logo.ts` | Event logo: background removal, crop, pixel-grid downsampling with colour reduction, outline |
 | `src/store.ts` | Per-track saved settings and checkpoint pins/deletions (localStorage), merge with auto-detection |
 
 ## Your own characters (Grok Imagine + unfake.js)

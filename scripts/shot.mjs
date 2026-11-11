@@ -11,10 +11,10 @@ page.on('console', (m) => { if (m.type() === 'error') console.log('[console]', m
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(`${base}/?sample=${process.env.SAMPLE ?? 'gpx'}&nodisk`);
 await page.waitForFunction(() => window.__pixelHike && window.__pixelHike.duration > 0, null, { timeout: 120000 });
-const info = await page.evaluate(({ mode, aspect, setup }) => {
+const info = await page.evaluate(async ({ mode, aspect, setup }) => {
   const h = window.__pixelHike;
   h.setMode(mode); h.setAspect(aspect);
-  if (setup) new Function('h', setup)(h);
+  if (setup) await new Function('h', setup)(h);
   return {
     duration: h.duration, speedup: Math.round(h.speedup),
     cps: h.checkpoints.filter((c) => c.enabled).map((c) => `${c.kind}@${(c.d / 1000).toFixed(1)}km t=${h.timeline.reachTimes.get(c.id)?.toFixed(1)}`),

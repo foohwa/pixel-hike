@@ -128,3 +128,7 @@ footer a { color: var(--sky); }
 #volume { width: 90px; }
 #saved { color: var(--green); }
 .cps > li { flex-shrink: 0; }
+
+#logoPreview { image-rendering: pixelated; background: var(--ink); border: 2px solid var(--night); padding: 3px; max-width: 150px; }
+#logoOpts .check { font-size: 11px; }
+#logoOpts select { font-size: 11px; padding: 3px 4px; }

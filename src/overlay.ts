@@ -1,4 +1,5 @@
 import { frameOf, type Anim, type SpriteSet } from './characters';
+import type { LogoSet } from './logo';
 import { drawText, textWidth } from './font';
 import { C, PALETTE, rgb01 } from './palette';
 import type { SkyState } from './sky';
@@ -37,6 +38,14 @@ export interface OverlayInput {
   /** Screen position of each enabled checkpoint. */
   cpScreen: Map<string, ScreenPoint>;
   showMinimap: boolean;
+  logo: EventLogo | null;
+}
+
+export interface EventLogo {
+  set: LogoSet;
+  intro: boolean;
+  badge: boolean;
+  outro: boolean;
 }
 
 export const KIND_COLOR: Record<Checkpoint['kind'], string> = {
@@ -60,6 +69,7 @@ export function drawOverlay(o: OverlayInput) {
 
   drawWorldSprites(o);
   drawHud(o);
+  drawBadge(o);
   drawToasts(o);
   drawBanner(o);
   drawTitleCard(o);
@@ -475,7 +485,17 @@ function drawTitleCard(o: OverlayInput) {
   const bw = Math.max(textWidth(title, scale), textWidth(dateStr), textWidth(statStr)) + 20;
   const bh = 7 * scale + 32;
   const x = Math.round(W / 2 - bw / 2);
-  const y = Math.round(H / 2 - bh / 2 - 10 - slide * (H / 2 + bh));
+  // event logo sits on its own dark plate above the card (logos are usually made for dark backgrounds)
+  const logo = o.logo?.intro ? o.logo.set.get(logoHeight(o, W > H ? 48 : 56, bw), false) : null;
+  const plateH = logo ? logo.height + 10 : 0;
+  const stackH = bh + (logo ? plateH + 4 : 0);
+  const top = Math.round(H / 2 - stackH / 2 - 10 - slide * (H / 2 + stackH));
+  if (logo) {
+    const pw = Math.max(logo.width + 14, 40);
+    panel(ctx, W / 2 - pw / 2, top, pw, plateH, C.ink, C.cream);
+    ctx.drawImage(logo, Math.round(W / 2 - logo.width / 2), top + 5);
+  }
+  const y = top + (logo ? plateH + 4 : 0);
   panel(ctx, x, y, bw, bh, C.cream, C.ink);
   ctx.fillStyle = C.coral;
   ctx.fillRect(x + 2, y + 2, bw - 4, 2);
@@ -508,7 +528,16 @@ function drawOutroCard(o: OverlayInput) {
   const bh = 16 + rows.length * 10 + 4;
   const u = easeOutBack(clamp((state.outroU - 0.2) * 3, 0, 1));
   const x = Math.round(W / 2 - bw / 2);
-  const y = Math.round(H / 2 - bh / 2 - 8 + (1 - u) * (H / 2 + bh));
+  const logo = o.logo?.outro ? o.logo.set.get(logoHeight(o, W > H ? 28 : 40, bw), false) : null;
+  const plateH = logo ? logo.height + 8 : 0;
+  const stackH = bh + (logo ? plateH + 3 : 0);
+  const top = Math.round(H / 2 - stackH / 2 - 12 + (1 - u) * (H / 2 + stackH));
+  if (logo) {
+    const pw = Math.max(logo.width + 12, 36);
+    panel(ctx, W / 2 - pw / 2, top, pw, plateH, C.ink, C.cream);
+    ctx.drawImage(logo, Math.round(W / 2 - logo.width / 2), top + 4);
+  }
+  const y = top + (logo ? plateH + 3 : 0);
   panel(ctx, x, y, bw, bh, C.cream, C.ink);
   ctx.fillStyle = C.red;
   ctx.fillRect(x + 2, y + 2, bw - 4, 2);
@@ -531,4 +560,20 @@ function hashStr(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;
+}
+
+/** Logo height that fits: the preferred size, shrunk if the logo would be wider than `maxW`. */
+function logoHeight(o: OverlayInput, preferred: number, maxW: number) {
+  const a = o.logo!.set.aspect;
+  return Math.max(10, Math.min(preferred, Math.floor((Math.max(maxW, o.W * 0.6) - 14) / a)));
+}
+
+/** Small logo in the bottom-right corner while the hike plays. */
+function drawBadge(o: OverlayInput) {
+  const { ctx, W, H, state } = o;
+  if (!o.logo?.badge || state.phase === 'intro' || state.phase === 'outro') return;
+  const h = W > H ? 20 : 22;
+  const img = o.logo.set.get(Math.min(h, Math.floor((W * 0.3) / o.logo.set.aspect)), true);
+  const profileTop = H - 4 - 18;
+  ctx.drawImage(img, W - 4 - img.width, profileTop - 3 - img.height);
 }
