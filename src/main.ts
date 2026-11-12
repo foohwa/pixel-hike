@@ -931,7 +931,12 @@ function ensureWater(): Promise<void> {
   state.waterLoad = loadWater(state.bbox, {
     onProgress: (done, total) => { if (state.track === track) mapStatus(`Loading map… ${done}/${total}`); },
     // springs + waterfalls come from a separate small query and may land a bit later
-    onExtras: (w) => { if (state.track === track && state.water === w) { refreshCheckpoints(); rebuild(); } },
+    onExtras: (w) => {
+      if (state.track !== track || state.water !== w) return;
+      state.water = { ...w }; // a new object, so the renderer rebuilds the map with them
+      refreshCheckpoints();
+      rebuild();
+    },
   })
     .then((w) => {
       if (state.track !== track) return; // another file was loaded meanwhile

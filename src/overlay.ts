@@ -33,7 +33,7 @@ export interface MapFrame {
    * A waterfall a short detour off the route, shown beside the trail where the route passes closest
    * (x/y), with an arrow sign at the trail edge (sx/sy) pointing towards it (left = arrow points left).
    */
-  sideFalls: { x: number; y: number; q: number; sx: number; sy: number; left: boolean }[];
+  sideFalls: { x: number; y: number; q: number; sx: number; sy: number; left: boolean; sprite: boolean }[];
   camps: { x: number; y: number; q: number }[];
   springs: { x: number; y: number; q: number }[];
 }
@@ -335,7 +335,8 @@ function drawMap(o: OverlayInput) {
   }
   // …and one just off the route, brought up beside the trail with a sign pointing the way
   for (const f of m.sideFalls) {
-    if (f.q < 2.6) drawFallSprite(ctx, FALL_L, f.x, f.y, t, night);
+    if (!f.sprite) { /* 3D: the waterfall is part of the terrain, just the sign here */ }
+    else if (f.q < 2.6) drawFallSprite(ctx, FALL_L, f.x, f.y, t, night);
     else drawFallSprite(ctx, FALL_M, f.x, f.y, t, night);
     drawSprite(ctx, ARROW_SIGN, f.sx, f.sy + 1, { keys: { k: C.ink, m: C.cream, a: C.sky, L: C.brown }, flip: f.left });
   }

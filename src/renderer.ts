@@ -315,12 +315,14 @@ export class PixelRenderer {
     const w = this.water;
     if (w && (w.data !== data.water || w.terrain !== data.terrain)) {
       this.scene.remove(w.scene.group);
+      if (w.scene.falls) this.scene.remove(w.scene.falls);
       w.scene.dispose();
       this.water = null;
     }
     if (!this.water && data.water) {
       const scene = buildWater(data.water, data.track, data.terrain, this.W, this.H);
       this.scene.add(scene.group);
+      if (scene.falls) this.scene.add(scene.falls);
       this.water = { scene, data: data.water, terrain: data.terrain };
     }
     if (this.water) this.water.scene.group.visible = data.env.water;
@@ -551,6 +553,9 @@ export class PixelRenderer {
     if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
     terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
+    if (this.water?.scene.falls) {
+      this.water.scene.falls.visible = env.landmarks && !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
+    }
     if (this.water) {
       const dark = sky.lamp > 0.5;
       for (const l of this.water.scene.lineMats) l.mat.color.set(dark ? l.night : l.day);
@@ -873,7 +878,8 @@ export class PixelRenderer {
     if (env.landmarks) {
       for (const p of sp.pois) {
         if (p.kind === 'waterfall') {
-          const v = vis(p.x, p.y, p.z, 3.5);
+          // in 3D the waterfall is built into the terrain (falls3d.ts); the sprites are for the map view
+          const v = is2d ? vis(p.x, p.y, p.z, 3.5) : null;
           if (v) out.falls.push(v);
           if (p.d == null && p.near.off < 2500) {
             const s = this.sideFall(p, vis);
@@ -914,7 +920,7 @@ export class PixelRenderer {
     const px = clamp(22 / Math.max(0.75, v.q), 18, 26); // clear of the hiker sprite
     return {
       x: Math.round(v.x + sx * px), y: Math.round(v.y + sy * px * 0.6), q: v.q,
-      sx: Math.round(v.x + sx * 6), sy: Math.round(v.y + sy * 4), left: sx < 0,
+      sx: Math.round(v.x + sx * 6), sy: Math.round(v.y + sy * 4), left: sx < 0, sprite: this.mode === '2d',
     };
   }
 

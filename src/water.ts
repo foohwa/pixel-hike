@@ -7,7 +7,8 @@ import type { BBox } from './dem';
 import { loadTiles } from './osmtiles';
 import { C, rgb01 } from './palette';
 import { LIGHT_GLSL, litMaterial, shared, type Terrain } from './terrain';
-import type { Track } from './track';
+import { buildFalls, type FallSite } from './falls3d';
+import { clamp, sampleAt, type Track } from './track';
 
 /**
  * Rivers, streams, lakes, roads and a few landmarks (waterfalls, viewpoints, peaks, camps, springs)
@@ -284,6 +285,8 @@ export interface WaterScene {
   /** River surface uniforms: glint strength + colour (sun sparkle by day, moonlight at night). */
   river: { uGlint: { value: number }; uGlintThr: { value: number }; uGlintCol: { value: THREE.Vector3 } } | null;
   sprites: MapSprites;
+  /** 3D waterfalls built into the terrain (shown in the 3D view with landmarks on). */
+  falls: THREE.Group | null;
   dispose(): void;
 }
 
@@ -488,6 +491,13 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
     const at = nearestOnRoute(track, x, z);
     pois.push({ kind: p.kind, name: p.name, x, y: terrain.worldY(x, z), z, d: at.off < 80 ? at.d : null, near: at });
   }
+  const falls = fallSites(pois, track);
+  const fallScene = falls.length ? buildFalls(falls, terrain) : null;
+  // clear the canopy round each waterfall so it isn't buried in trees
+  for (const f of falls) {
+    const y = terrain.worldY(f.x, f.z);
+    clearBanks(terrain, [f.x, y, f.z, f.x - f.fx * f.h * 1.2, y, f.z - f.fz * f.h * 1.2], f.h * 0.95);
+  }
 
   return {
     group,
@@ -495,13 +505,46 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
     lineMats,
     river,
     sprites: { bridges, lamps: Float32Array.from(lamps), paths, rapids: Float32Array.from(rapids), pois },
+    falls: fallScene?.group ?? null,
     dispose() {
+      fallScene?.dispose();
       group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
       lineMats.forEach((l) => l.mat.dispose());
       riverMat?.dispose();
       lake.dispose();
     },
   };
+}
+
+/**
+ * Where each waterfall stands in 3D. One within ~2.5 km of the route is brought up beside the trail
+ * where the route passes closest (on the side it really lies), sized to read at the follow camera's
+ * distance; one on the trail sits just beside it; farther ones stay where they are, a bit smaller.
+ */
+function fallSites(pois: MapSprites['pois'], track: Track): FallSite[] {
+  const b = track.bounds;
+  const camDist = clamp(Math.max(b.maxX - b.minX, b.maxZ - b.minZ) * 0.1, 500, 2600); // same as the renderer's rig
+  const H = camDist * 0.115;
+  const out: FallSite[] = [];
+  for (const p of pois) {
+    if (p.kind !== 'waterfall') continue;
+    if (p.near.off < 2500) {
+      const d = p.near.d;
+      const ax = sampleAt(track, track.x, d), az = sampleAt(track, track.z, d);
+      const hx = sampleAt(track, track.hdx, d), hz = sampleAt(track, track.hdz, d);
+      const side = Math.sign(hx * (p.z - az) - hz * (p.x - ax)) || 1;
+      const nx = -hz * side, nz = hx * side, nl = Math.hypot(nx, nz) || 1;
+      const off = camDist * 0.12;
+      out.push({ x: ax + (nx / nl) * off, z: az + (nz / nl) * off, fx: -nx / nl, fz: -nz / nl, h: H });
+    } else {
+      const i = Math.min(track.n - 1, Math.round(p.near.d / track.step));
+      let fx = track.x[i] - p.x, fz = track.z[i] - p.z;
+      const l = Math.hypot(fx, fz) || 1;
+      fx /= l; fz /= l;
+      out.push({ x: p.x + fx * H * 0.6, z: p.z + fz * H * 0.6, fx, fz, h: H * 0.7 });
+    }
+  }
+  return out;
 }
 
 /** Flat strip `w` metres wide along each polyline, draped at the centre line's height. */
