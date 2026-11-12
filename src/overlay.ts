@@ -9,6 +9,7 @@ import type { Timeline, TimelineState } from './timeline';
 import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 import { DECOR_KEYS, WARN_SIGN, ZONE_COLOR, type TrailZones } from './zones';
 import type { EnvOptions } from './renderer';
+import { drawEffortFx, tintFrame, type EffortFx } from './effort';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
 
@@ -85,6 +86,10 @@ export interface OverlayInput {
   /** Checkpoints built into the 3D scene (sites3d.ts): no sprite for these. */
   sited: Set<string> | null;
   env: EnvOptions;
+  /** Heart-rate flash / sweat for the walker right now. */
+  effort: EffortFx;
+  /** Animation clock for the walker (slower when flat out). */
+  heroT: number;
 }
 
 export interface EventLogo {
@@ -516,8 +521,10 @@ function drawWorldSprites(o: OverlayInput) {
   if (!o.heroInScene) {
     ctx.fillStyle = C.ink;
     ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
-    ctx.drawImage(frameOf(o.hero, anim, t, o.facingLeft), h.x - 8, h.y - 16);
+    const f = frameOf(o.hero, anim, o.heroT, o.facingLeft);
+    ctx.drawImage(o.effort.tint && o.effort.k > 0 ? tintFrame(f, o.effort.tint, o.effort.k) : f, h.x - 8, h.y - 16);
   }
+  drawEffortFx(ctx, o.effort, h.x, h.y, t, o.facingLeft);
 
   // head-lamp sparkle at night
   const front = o.heroView === 'front' && o.hero.views?.front[anim];
@@ -623,7 +630,8 @@ function drawHud(o: OverlayInput) {
   if (Number.isFinite(hr)) {
     const beat = (state.t * hr) / 60;
     const big = beat - Math.floor(beat) < 0.22;
-    right.push([HEART, String(Math.round(hr)), big ? C.pink : C.white]);
+    const zone = o.effort.zone;
+    right.push([HEART, String(Math.round(hr)), zone === 'max' ? C.red : zone === 'hard' ? C.yellow : big ? C.pink : C.white]);
   }
   if (Number.isFinite(temp)) right.push([THERMO, `${Math.round(temp)}°C`, C.white]);
   const rw = Math.max(...right.map(([, s]) => textWidth(s))) + 20;

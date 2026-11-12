@@ -128,6 +128,13 @@ export class SceneFigures {
     f.shadow.material.uniforms.uStrength.value = shadowK > 0 ? 0.35 + 0.4 * shadowK : 0.5;
   }
 
+  /** Wash figure `i` with `color` at strength `k` (the heart-rate flash), or clear it. */
+  setTint(i: number, color: string | null, k: number) {
+    const u = this.figures[i].quad.material.uniforms;
+    if (color) u.uTint.value.set(...rgb01(color));
+    u.uTintK.value = color ? k : 0;
+  }
+
   hide() {
     for (const f of this.figures) f.quad.visible = f.shadow.visible = false;
   }
@@ -147,13 +154,14 @@ export class SceneFigures {
 function figureMaterial() {
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
-    uniforms: { ...shared, uMap: { value: null as THREE.Texture | null } },
+    uniforms: { ...shared, uMap: { value: null as THREE.Texture | null }, uTint: { value: new THREE.Vector3(1, 0, 0) }, uTintK: { value: 0 } },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
       void main() { vUv = uv; gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0); }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D uMap; uniform vec3 uSunCol; uniform vec3 uAmb; uniform float uLamp;
+      uniform vec3 uTint; uniform float uTintK;
       varying vec2 vUv;
       void main() {
         vec4 c = texture2D(uMap, vUv);
@@ -161,6 +169,9 @@ function figureMaterial() {
         vec3 lit = c.rgb * min(uAmb + uSunCol * 0.75, vec3(1.1));
         // at night the head-lamp spills back onto the walker a little, so it never goes black
         vec3 col = mix(c.rgb, lit, 0.5 - 0.28 * uLamp);
+        // heart-rate flash: washed towards the tint, keeping a little of the shading
+        float l = dot(c.rgb, vec3(0.3, 0.55, 0.15));
+        col = mix(col, uTint * (0.8 + 0.45 * l), uTintK);
         gl_FragColor = vec4(col, 1.0);
       }
     `,

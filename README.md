@@ -21,6 +21,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **"Me" character** — dress the character in your own kit: headwear (headlamp, headband, cap, bucket hat), hair, skin, top + sleeves, shorts/pants, race vest/backpack, shoes, bib, poles, wristband. Preset: the KORGA UTR race kit from the finish photos. Saved per track.
 - **Trail zones** (optional, off by default — open the collapsed "Trail zones" section) — the trail is dressed by elevation: lowland jungle (ferns, palms), montane forest, mossy forest (moss cushions, beard-moss trees, pitcher plants), rocky ridge or alpine meadow. Tropical tracks default to real cloud-forest heights (1,000 m / 1,500 m); elsewhere the bands split the track's own range. Steep stretches (>~28%) get fixed ropes, roots, rock steps and a warning sign; the elevation profile is coloured by zone and a toast names each new zone. Props darken at night except inside the head-lamp glow.
 - **Event logo** — upload a race/event logo: its flat background is removed and it's re-drawn on an exact pixel grid (dominant colour per cell, 2–6 colours or the game palette). Shown on the intro card, as a corner badge and on the finish card; saved with your edits.
+- **Heart-rate effects** — on your hardest stretches (the top ~15 % of this hike's heart rate) the character flashes yellow on each heartbeat and sweats; near your max (top ~3 %) it blinks red like a game character taking damage, puffs and plods. The HUD heart turns yellow / red too. Without a heart rate, steep climbs just make you sweat.
 - **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
 - **Music** — four bundled CC0 chiptunes by Juhani Junkala (auto-picked per activity), or your own file. Looped to the video length with a fade-out, played in the preview and muxed into the MP4 as AAC. Credits in [`public/music/CREDITS.md`](public/music/CREDITS.md).
 - **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset edits* forgets them.
@@ -69,6 +70,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/falls3d.ts` | 3D waterfall (rock cliff, animated water curtain, splash pool) set into the terrain |
 | `src/landmarks.ts` | Viewpoint finder (OSM viewpoints + terrain openness) and naming checkpoints after mapped peaks / camps |
 | `src/zones.ts` | Elevation zones + technical stretches, trail-side prop sprites (placed per frame in `renderer.ts`) |
+| `src/effort.ts` | Heart-rate effort zones (from the track's own heart-rate spread), the flash / sweat / breath effects |
 | `src/logo.ts` | Event logo: background removal, crop, pixel-grid downsampling with colour reduction, outline |
 | `src/store.ts` | Per-track saved settings and checkpoint pins/deletions (localStorage), merge with auto-detection |
 

@@ -16,6 +16,7 @@ import { clamp, FOLLOW_YAW, followDistance, gaussian, sampleAt, type Activity, t
 import { buildSites, hasSite, type Sites } from './sites3d';
 import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
+import { effortAt } from './effort';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
@@ -62,6 +63,8 @@ export interface EnvOptions {
   water: boolean;
   /** Viewpoint camera moves, camp / spring / waterfall markers (OSM landmarks). */
   landmarks: boolean;
+  /** The walker flashes / sweats / puffs when the heart rate is high. */
+  effort: boolean;
 }
 
 interface Rig {
@@ -656,13 +659,15 @@ export class PixelRenderer {
         if (st.t - this.viewWantT >= 0.3 && st.t - this.viewSince >= 0.6) { this.view = want; this.viewSince = st.t; }
       }
     } else this.view = 'side';
+    const effort = effortAt(track, st.d, st.t, env.effort && st.phase === 'move');
+    const heroT = effort.slow ? st.t * 0.72 : st.t; // a heavier, slower step when flat out
     if (inScene && hiker.visible) {
       const anim = pickAnim({ state: st, track, activity: this.data.activity, sky });
       const feet = new THREE.Vector3(hx, hy, hz);
       const useShadowDir = env.light && shared.uShadow.value > 0;
       const light = (useShadowDir ? shared.uShadowDir.value : shared.uSunDir.value).clone().normalize();
       const shadowK = useShadowDir ? shared.uShadow.value : sky.lamp < 0.5 ? 1 : 0;
-      this.figures.place(0, frameOf(this.data.hero, anim, st.t, this.facingLeft, this.view), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+      this.figures.place(0, frameOf(this.data.hero, anim, heroT, this.facingLeft, this.view), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
       if (this.data.pet && petAt) {
         // the companion's feet: its screen spot, at the walker's depth, dropped onto the ground
         const ndcZ = feet.clone().project(this.camera).z;
@@ -670,6 +675,7 @@ export class PixelRenderer {
         pf.y = terrain.worldY(pf.x, pf.z);
         this.figures.place(1, frameOf(this.data.pet, anim, st.t + 0.13, this.facingLeft, this.view), pf, petAt.x, petAt.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
       } else this.figures.place(1, null, feet, 0, 0, this.camera, this.W, this.H, terrain, r.camDist, light, 0);
+      this.figures.setTint(0, effort.tint, effort.k);
     } else this.figures.hide();
 
     // ---- 3D pass
@@ -724,6 +730,8 @@ export class PixelRenderer {
       heroView: this.view,
       sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,
+      effort,
+      heroT,
     });
     this.overlayTex.needsUpdate = true;
 
