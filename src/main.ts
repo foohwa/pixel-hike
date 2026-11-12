@@ -14,6 +14,7 @@ import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save
 import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
 import type { BBox, Dem } from './dem';
 import { loadWater, routeSurface, type SurfaceInfo, type WaterData } from './water';
+import { findViews, namePeaks, openness, viewCheckpoints } from './landmarks';
 import { defaultDuration, Timeline } from './timeline';
 import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
@@ -46,6 +47,7 @@ const ui = {
   envSplits: $<HTMLInputElement>('envSplits'),
   envLight: $<HTMLInputElement>('envLight'),
   envWater: $<HTMLInputElement>('envWater'),
+  envLandmarks: $<HTMLInputElement>('envLandmarks'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
   zoneRows: $('zoneRows'),
   zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
@@ -298,6 +300,7 @@ function rebuild() {
       splits: ui.envSplits.checked,
       light: ui.envLight.checked,
       water: ui.envWater.checked,
+      landmarks: ui.envLandmarks.checked,
     },
   });
   state.t = Math.min(state.t, state.timeline.duration);
@@ -312,7 +315,14 @@ function rebuild() {
 function refreshCheckpoints() {
   if (!state.track) return;
   const pins = state.checkpoints.filter((c) => c.pinned);
-  state.checkpoints = mergeCheckpoints(detectCheckpoints(state.track, state.activity), pins, state.tombstones);
+  const detected = detectCheckpoints(state.track, state.activity);
+  if (ui.envLandmarks.checked) {
+    // viewpoints: OSM ones beside the trail + the most open terrain, clear of the other checkpoints
+    const views = findViews(state.track, state.dem ? state.terrain : null, state.water, detected.map((c) => c.d));
+    detected.push(...viewCheckpoints(state.track, views));
+  }
+  state.checkpoints = mergeCheckpoints(detected, pins, state.tombstones);
+  namePeaks(state.track, state.checkpoints, state.water);
   renderCheckpointList();
 }
 
@@ -514,6 +524,7 @@ function collectSettings() {
     envSplits: ui.envSplits.checked,
     envLight: ui.envLight.checked,
     envWater: ui.envWater.checked,
+    envLandmarks: ui.envLandmarks.checked,
     zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
@@ -548,7 +559,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
   if (s.scenery === 'auto' || s.scenery === 'tropical' || s.scenery === 'alpine' || s.scenery === 'classic') ui.scenery.value = s.scenery;
-  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight], ['envWater', ui.envWater]] as const) {
+  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight], ['envWater', ui.envWater], ['envLandmarks', ui.envLandmarks]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
@@ -900,10 +911,15 @@ ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSou
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
 for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits, ui.envLight]) el.onchange = () => rebuild();
 ui.envWater.onchange = () => { rebuild(); if (ui.envWater.checked) void ensureWater(); };
+ui.envLandmarks.onchange = () => {
+  refreshCheckpoints();
+  rebuild();
+  if (ui.envLandmarks.checked) void ensureWater();
+};
 
 /** Download the map area's rivers + lakes once (cached per area in the browser). */
 function ensureWater(): Promise<void> {
-  if (!state.bbox || !ui.envWater.checked) return Promise.resolve();
+  if (!state.bbox || !(ui.envWater.checked || ui.envLandmarks.checked)) return Promise.resolve();
   if (state.water) return Promise.resolve();
   if (state.waterLoad) return state.waterLoad;
   const track = state.track;
@@ -913,6 +929,7 @@ function ensureWater(): Promise<void> {
       state.water = w;
       state.surface = routeSurface(w, track!);
       renderStats();
+      refreshCheckpoints(); // OSM viewpoints + peak names
       rebuild();
     })
     .catch((e) => {
@@ -1049,8 +1066,8 @@ ui.export.onclick = async () => {
   if (state.exporting) { exportAbort?.abort(); return; }
   await updateSoundtrack();
   // rivers are still downloading? give them a moment so the video includes them
-  if (ui.envWater.checked && !state.water && state.waterLoad) {
-    setStatus('Fetching rivers…');
+  if ((ui.envWater.checked || ui.envLandmarks.checked) && !state.water && state.waterLoad) {
+    setStatus('Fetching map data…');
     await Promise.race([state.waterLoad, new Promise((r) => setTimeout(r, 20_000))]);
     setStatus('');
   }
@@ -1155,6 +1172,7 @@ Object.assign(window, {
     setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean; light?: boolean }) {
       if (e.light != null) ui.envLight.checked = e.light;
       if ((e as { water?: boolean }).water != null) ui.envWater.checked = !!(e as { water?: boolean }).water;
+      if ((e as { landmarks?: boolean }).landmarks != null) { ui.envLandmarks.checked = !!(e as { landmarks?: boolean }).landmarks; refreshCheckpoints(); }
       if (e.scenery) ui.scenery.value = e.scenery;
       if (e.clouds != null) ui.envClouds.checked = e.clouds;
       if (e.life != null) ui.envLife.checked = e.life;
@@ -1163,6 +1181,13 @@ Object.assign(window, {
       rebuild();
     },
     setZones(z: Partial<ZoneSettings>) { setZoneUi({ ...zoneSettings(), ...z }); rebuild(); },
+    /** Openness score every 500 m: [km, score, elevation]. */
+    viewScan() {
+      const t = state.track!, tr = state.terrain!;
+      const out: number[][] = [];
+      for (let d = 400; d < t.stats.distance; d += 500) out.push([+(d / 1000).toFixed(1), +openness(t, tr, d).score.toFixed(3), Math.round(sampleAt(t, t.ele, d))]);
+      return out;
+    },
     zones() { return state.zones && { runs: state.zones.runs, tech: state.zones.tech, summary: ui.zoneSummary.textContent }; },
     forgetSaved() { if (state.track) forget(state.track); },
     sheetDataUrl(c: CharacterId, scale = 1, guides = false, g: Gender = 'male') { return renderSheet(builtInSet(c, g), scale, guides).toDataURL('image/png'); },

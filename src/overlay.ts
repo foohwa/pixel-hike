@@ -21,6 +21,18 @@ export interface DecorFrame {
   signs: DecorItem[];
 }
 
+/** Map sprites for this frame (see PixelRenderer.mapFrame): screen positions, q = distance / camera distance. */
+export interface MapFrame {
+  lamps: { x: number; y: number; q: number }[];
+  rapids: { x: number; y: number; q: number }[];
+  /** tx/ty = the route's direction on screen (the bridge deck follows it). */
+  bridges: { x: number; y: number; q: number; tx: number; ty: number }[];
+  vehicles: { x: number; y: number; left: boolean; moto: boolean; color: string }[];
+  falls: { x: number; y: number; q: number }[];
+  camps: { x: number; y: number; q: number }[];
+  springs: { x: number; y: number; q: number }[];
+}
+
 export interface DialState {
   isDay: boolean;
   frac: number; // 0..1 across the current day (sunrise→sunset) or night (sunset→sunrise)
@@ -56,6 +68,7 @@ export interface OverlayInput {
   zones: TrailZones | null;
   /** Props along the trail for this frame (see PixelRenderer.decorFrame), or null. */
   decor: DecorFrame | null;
+  map: MapFrame | null;
   env: EnvOptions;
 }
 
@@ -168,10 +181,132 @@ function drawDecor(o: OverlayInput) {
   for (const s of dec.signs) drawSprite(ctx, WARN_SIGN, s.x, s.y + 1, { keys: keys(true) });
 }
 
+// ---------------------------------------------------------------- map sprites
+
+const CAR = [
+  '..kkkk..',
+  '.kbkbbk.',
+  'kkrrrrrk',
+  'krrrrrry',
+  '.kk..kk.',
+];
+const MOTO = [
+  '...h..',
+  '..kbk.',
+  '.kkkky',
+  'kk..kk',
+];
+const CAMP_SIGN = ['kkkkkkk', 'kmmammk', 'kmaaamk', 'kkkkkkk', '...L...', '...L...'];
+const DROP = ['.s.', 'sSs', 'SsS', '.S.'];
+
+function drawMap(o: OverlayInput) {
+  const m = o.map;
+  if (!m) return;
+  const { ctx } = o;
+  const t = o.state.t;
+  const night = o.sky.lamp > 0.5;
+
+  // street lights: a post and a warm bulb (town lights from afar)
+  for (const l of m.lamps) {
+    if (l.q < 1.3) {
+      ctx.fillStyle = C.ink2;
+      ctx.fillRect(l.x, l.y - 3, 1, 3);
+      ctx.fillStyle = C.cream;
+      ctx.fillRect(l.x, l.y - 4, 1, 1);
+      if (l.q < 0.8) {
+        ctx.fillStyle = C.yellow;
+        ctx.fillRect(l.x - 1, l.y - 4, 1, 1);
+        ctx.fillRect(l.x + 1, l.y - 4, 1, 1);
+      }
+    } else {
+      ctx.fillStyle = l.q < 2.2 ? C.cream : C.yellow;
+      ctx.fillRect(l.x, l.y - 1, 1, 1);
+    }
+  }
+
+  // white water on steep streams: a rock with foam churning round it
+  for (const r of m.rapids) {
+    const ph = Math.floor(t * 6 + r.x * 0.7) % 3;
+    ctx.fillStyle = night ? C.ink2 : C.rockDark;
+    ctx.fillRect(r.x, r.y - 1, 1, 1);
+    ctx.fillStyle = night ? C.rockDark : C.white;
+    ctx.fillRect(r.x - 1 + ph, r.y, 1, 1);
+    if (r.q < 1.1) ctx.fillRect(r.x + 1 - ph, r.y - 2 + (ph & 1), 1, 1);
+  }
+
+  // waterfalls: a cliff with water tumbling down it and spray at the bottom
+  for (const f of m.falls) {
+    const h = f.q < 1.2 ? 11 : f.q < 2.2 ? 8 : 5;
+    const top = f.y - h;
+    ctx.fillStyle = night ? C.ink2 : C.rockDark;
+    ctx.fillRect(f.x - 3, top, 1, h);
+    ctx.fillRect(f.x + 3, top, 1, h);
+    ctx.fillRect(f.x - 2, top - 1, 5, 1);
+    const water = night ? [C.dusk, C.sky, C.skyLight] : [C.sky, C.skyLight, C.white];
+    for (let yy = 0; yy < h; yy++) {
+      for (let xx = -2; xx <= 2; xx++) {
+        ctx.fillStyle = water[(((yy - Math.floor(t * 9) + xx * 2) % 3) + 3) % 3];
+        ctx.fillRect(f.x + xx, top + yy, 1, 1);
+      }
+    }
+    ctx.fillStyle = night ? C.skyLight : C.white;
+    const sp = Math.floor(t * 5) % 2;
+    ctx.fillRect(f.x - 3 - sp, f.y, 2, 1);
+    ctx.fillRect(f.x + 2 + sp, f.y, 2, 1);
+    ctx.fillRect(f.x - 1 + sp, f.y + 1, 2, 1);
+  }
+
+  // bridges: a plank deck along the route with a rail and posts either side
+  for (const b of m.bridges) {
+    const L = Math.round(clamp(6 / Math.max(0.8, b.q), 3, 7));
+    const nx = -b.ty, ny = b.tx;
+    const at = (s: number, a: number) => [Math.round(b.x + b.tx * s + nx * a), Math.round(b.y + b.ty * s + ny * a)];
+    ctx.fillStyle = night ? C.brownDark : C.brown;
+    for (let s = -L; s <= L; s++) for (const a of [-1, 0, 1]) { const [x, y] = at(s, a); ctx.fillRect(x, y, 1, 1); }
+    ctx.fillStyle = night ? C.ink2 : C.tan;
+    for (let s = -L; s <= L; s += 2) { const [x, y] = at(s, 0); ctx.fillRect(x, y, 1, 1); }
+    ctx.fillStyle = C.ink;
+    for (let s = -L; s <= L; s++) {
+      for (const a of [-2, 2]) {
+        const [x, y] = at(s, a);
+        ctx.fillRect(x, y - 1, 1, 1);
+        if (s % 3 === 0 || Math.abs(s) === L) ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  // traffic
+  for (const v of m.vehicles) {
+    const rows = v.moto ? MOTO : CAR;
+    const keys = { k: C.ink, r: v.color === C.white && night ? C.rock : v.color, b: night ? C.ink2 : C.skyLight, y: C.yellow, h: v.color };
+    drawSprite(ctx, rows, v.x, v.y + 1, { keys, flip: v.left });
+    if (night) {
+      // headlight beam on the road ahead
+      ctx.fillStyle = C.cream;
+      const dx = v.left ? -1 : 1;
+      const fx = v.x + dx * (Math.ceil(rows[0].length / 2) + 1);
+      ctx.fillRect(fx, v.y - 1, 1, 1);
+      ctx.fillRect(fx + dx, v.y - 1, 1, 1);
+      ctx.fillStyle = C.yellow;
+      ctx.fillRect(fx + dx * 2, v.y - 1, 1, 1);
+      ctx.fillStyle = C.red; // tail light
+      ctx.fillRect(v.x - dx * Math.ceil(rows[0].length / 2), v.y - 2, 1, 1);
+    }
+  }
+
+  // camps beside the trail: a little tent sign; springs: a bobbing water drop
+  for (const c of m.camps) drawSprite(ctx, CAMP_SIGN, c.x + 7, c.y + 1, { keys: { k: C.ink, m: C.cream, a: C.orange, L: C.brown } });
+  for (const s of m.springs) {
+    const bob = Math.floor(t * 2) % 2;
+    drawSprite(ctx, DROP, s.x + 6, s.y - 2 - bob, { keys: { s: C.skyLight, S: C.sky } });
+  }
+}
+
 function drawWorldSprites(o: OverlayInput) {
   const { ctx, state, timeline } = o;
   const t = state.t;
 
+  drawMap(o);
   drawDecor(o);
 
   for (const cp of o.checkpoints) {
@@ -546,8 +681,10 @@ function drawBanner(o: OverlayInput) {
   const bw = Math.max(textWidth(title, scale), textWidth(sub), leg ? textWidth(leg) : 0) + 16;
   const bh = 7 * scale + 7 + 12 + (leg ? 9 : 0);
   const drop = easeOutBack(clamp(age * 4, 0, 1));
+  // at a viewpoint the banner gets out of the way after a second so you can see the view
+  const away = cp.kind === 'view' && o.env.landmarks ? clamp((age - 1.1) * 4, 0, 1) : 0;
   const top = H > W ? 84 : 44; // keep clear of the dial / minimap
-  const y = Math.round(top - (1 - drop) * (top + 20));
+  const y = Math.round(top - (1 - drop + away) * (top + bh + 20));
   const x = Math.round(W / 2 - bw / 2);
   panel(ctx, x, y, bw, bh, C.cream, C.ink);
   ctx.fillStyle = KIND_COLOR[cp.kind] === C.white ? C.ink : KIND_COLOR[cp.kind];

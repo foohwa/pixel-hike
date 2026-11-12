@@ -53,7 +53,7 @@ export const shared = {
   uShadow: { value: 0 },
 };
 
-const LIGHT_GLSL = /* glsl */ `
+export const LIGHT_GLSL = /* glsl */ `
 uniform vec3 uSunDir; uniform vec3 uSunCol; uniform vec3 uAmb;
 uniform vec3 uFogCol; uniform float uFogNear; uniform float uFogFar;
 uniform vec3 uLampPos; uniform float uLamp; uniform float uLampR;

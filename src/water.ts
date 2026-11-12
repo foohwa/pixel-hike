@@ -3,20 +3,27 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import type { BBox } from './dem';
-import { C } from './palette';
-import { litMaterial, type Terrain } from './terrain';
+import { C, rgb01 } from './palette';
+import { LIGHT_GLSL, litMaterial, shared, type Terrain } from './terrain';
 import type { Track } from './track';
 
 /**
- * Rivers, streams, lakes and roads from OpenStreetMap (© OpenStreetMap contributors, ODbL), fetched from
- * the public Overpass API for the diorama's area only, and cached in the browser per area.
+ * Rivers, streams, lakes, roads and a few landmarks (waterfalls, viewpoints, peaks, camps, springs)
+ * from OpenStreetMap (© OpenStreetMap contributors, ODbL), fetched from the public Overpass API for
+ * the diorama's area only, and cached in the browser per area.
  */
 
-/** road = main road, minor = local tar road (residential / unclassified / service), track = dirt / 4WD. */
-export type LineKind = 'river' | 'stream' | 'canal' | 'road' | 'minor' | 'track';
-export interface WaterLine { name: string; kind: LineKind; pts: [number, number][] } // [lat, lon]
+/**
+ * road = main road, minor = local tar road (unclassified / tertiary-ish), street = residential /
+ * service lanes (only drawn near the route), track = dirt / 4WD.
+ */
+export type LineKind = 'river' | 'stream' | 'canal' | 'road' | 'minor' | 'street' | 'track';
+/** `w` = width in metres when OSM knows it. */
+export interface WaterLine { name: string; kind: LineKind; pts: [number, number][]; w?: number } // [lat, lon]
 export interface WaterArea { name: string; ring: [number, number][] }
-export interface WaterData { lines: WaterLine[]; areas: WaterArea[] }
+export type PoiKind = 'waterfall' | 'viewpoint' | 'peak' | 'camp' | 'spring';
+export interface Poi { kind: PoiKind; name: string; lat: number; lon: number; ele?: number }
+export interface WaterData { lines: WaterLine[]; areas: WaterArea[]; pois: Poi[] }
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -27,20 +34,25 @@ const ENDPOINTS = [
 const r5 = (v: number) => Math.round(v * 1e5) / 1e5;
 
 export async function loadWater(b: BBox): Promise<WaterData> {
-  const key = `pixelhike:water:v2:${[b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join(',')}`;
+  const key = `pixelhike:water:v3:${[b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join(',')}`;
   try {
     const hit = localStorage.getItem(key);
     if (hit) return JSON.parse(hit) as WaterData;
   } catch { /* storage unavailable */ }
 
   const bb = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
-  const query = `[out:json][timeout:40];(way["waterway"~"^(river|stream|canal)$"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|unclassified|residential|living_street|service|track)$"](${bb}););out tags geom;`;
+  const query = `[out:json][timeout:60];(` +
+    `way["waterway"~"^(river|stream|canal)$"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});` +
+    `way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|unclassified|residential|living_street|service|track)$"](${bb});` +
+    `node["waterway"="waterfall"](${bb});node["natural"~"^(peak|spring|waterfall)$"](${bb});` +
+    `node["tourism"~"^(viewpoint|camp_site)$"](${bb});way["tourism"="camp_site"](${bb});` +
+    `);out tags geom;`;
   let json: OverpassResult | null = null;
   let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 2 && !json; attempt++) {
+  for (let attempt = 0; attempt < 3 && !json; attempt++) {
     for (const url of ENDPOINTS) {
       try {
-        const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: AbortSignal.timeout(45_000) });
+        const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: AbortSignal.timeout(65_000) });
         if (!res.ok) throw new Error(`${res.status}`);
         json = (await res.json()) as OverpassResult;
         break;
@@ -48,7 +60,7 @@ export async function loadWater(b: BBox): Promise<WaterData> {
         lastErr = e;
       }
     }
-    if (!json) await new Promise((r) => setTimeout(r, 3000));
+    if (!json) await new Promise((r) => setTimeout(r, 4000 * (attempt + 1)));
   }
   if (!json) throw lastErr ?? new Error('Overpass unavailable');
 
@@ -62,7 +74,9 @@ export async function loadWater(b: BBox): Promise<WaterData> {
 
 interface OsmPoint { lat: number; lon: number }
 interface OsmElement {
-  type: 'way' | 'relation';
+  type: 'node' | 'way' | 'relation';
+  lat?: number;
+  lon?: number;
   tags?: Record<string, string>;
   geometry?: OsmPoint[];
   members?: { type: string; role: string; geometry?: OsmPoint[] }[];
@@ -72,16 +86,28 @@ interface OverpassResult { elements: OsmElement[] }
 function parse(res: OverpassResult): WaterData {
   const lines: WaterLine[] = [];
   const areas: WaterArea[] = [];
+  const pois: Poi[] = [];
   const pts = (g: OsmPoint[]) => g.map((p) => [r5(p.lat), r5(p.lon)] as [number, number]);
   for (const e of res.elements) {
     const t = e.tags ?? {};
     if (t.water === 'wastewater') continue;
-    const name = t.name ?? '';
-    if (e.type === 'way' && t.highway && e.geometry?.length) {
+    const name = t.name ?? t['name:en'] ?? '';
+    const poi = poiKind(t);
+    if (poi) {
+      let lat = e.lat, lon = e.lon;
+      if (e.type === 'way' && e.geometry?.length) {
+        lat = e.geometry.reduce((s, p) => s + p.lat, 0) / e.geometry.length;
+        lon = e.geometry.reduce((s, p) => s + p.lon, 0) / e.geometry.length;
+      }
+      if (lat == null || lon == null) continue;
+      const ele = parseFloat(t.ele);
+      pois.push({ kind: poi, name, lat: r5(lat), lon: r5(lon), ...(Number.isFinite(ele) ? { ele } : {}) });
+    } else if (e.type === 'way' && t.highway && e.geometry?.length) {
       if (t.service === 'parking_aisle' || t.service === 'driveway' || t.access === 'private') continue;
       lines.push({ name, kind: roadKind(t), pts: pts(e.geometry) });
     } else if (e.type === 'way' && t.waterway && e.geometry?.length) {
-      lines.push({ name, kind: t.waterway as WaterLine['kind'], pts: pts(e.geometry) });
+      const w = parseFloat(t.width);
+      lines.push({ name, kind: t.waterway as WaterLine['kind'], pts: pts(e.geometry), ...(w > 0 && w < 500 ? { w } : {}) });
     } else if (e.type === 'way' && t.natural === 'water' && e.geometry && e.geometry.length > 3) {
       areas.push({ name, ring: pts(e.geometry) });
     } else if (e.type === 'relation' && t.natural === 'water') {
@@ -90,7 +116,16 @@ function parse(res: OverpassResult): WaterData {
       }
     }
   }
-  return { lines, areas };
+  return { lines, areas, pois };
+}
+
+function poiKind(t: Record<string, string>): PoiKind | null {
+  if (t.waterway === 'waterfall' || t.natural === 'waterfall') return 'waterfall';
+  if (t.tourism === 'viewpoint') return 'viewpoint';
+  if (t.tourism === 'camp_site') return 'camp';
+  if (t.natural === 'peak') return 'peak';
+  if (t.natural === 'spring') return 'spring';
+  return null;
 }
 
 const UNPAVED = new Set(['unpaved', 'dirt', 'gravel', 'ground', 'earth', 'mud', 'sand', 'grass', 'compacted', 'fine_gravel']);
@@ -101,6 +136,7 @@ function roadKind(t: Record<string, string>): LineKind {
   if (h === 'track') return PAVED.has(t.surface) ? 'minor' : 'track';
   if (UNPAVED.has(t.surface)) return 'track';
   if (/^(motorway|trunk|primary|secondary|tertiary)/.test(h)) return 'road';
+  if (h === 'residential' || h === 'living_street' || h === 'service') return 'street';
   return 'minor';
 }
 
@@ -132,24 +168,52 @@ function stitch(parts: [number, number][][]): [number, number][][] {
 
 // ---------------------------------------------------------------- 3D
 
+/** World-space spots the overlay decorates each frame (see PixelRenderer.mapFrame). */
+export interface MapSprites {
+  /** Where the route crosses a river (or a stream on a road): a little bridge. */
+  bridges: { x: number; y: number; z: number; d: number }[];
+  /** Street lights along roads near the route (x, y, z triples), lit at night. */
+  lamps: Float32Array;
+  /** Roads near the route that vehicles drive along. */
+  paths: { pts: Float32Array; cum: Float32Array; len: number; cx: number; cz: number; r: number; main: boolean }[];
+  /** Steep stretches of stream: white water (x, y, z triples). */
+  rapids: Float32Array;
+  /** Landmarks; `d` = distance along the route when it's right beside the trail, else null. */
+  pois: { kind: PoiKind; name: string; x: number; y: number; z: number; d: number | null; near: { d: number; off: number } }[];
+}
+
 export interface WaterScene {
   group: THREE.Group;
   /** Track distances where the route crosses a named river or stream (for "SUNGAI KINTA" toasts). */
   crossings: { name: string; d: number }[];
-  /** Line materials, so the renderer can dim them at night and keep their pixel width. */
-  lineMats: { mat: LineMaterial; kind: DrawKind }[];
+  /** Line materials with their day / night colours (the renderer swaps them at dusk). */
+  lineMats: { mat: LineMaterial; day: string; night: string }[];
+  /** River surface uniforms: glint strength + colour (sun sparkle by day, moonlight at night). */
+  river: { uGlint: { value: number }; uGlintThr: { value: number }; uGlintCol: { value: THREE.Vector3 } } | null;
+  sprites: MapSprites;
   dispose(): void;
 }
 
-type DrawKind = 'river' | 'stream' | 'road' | 'minor' | 'track';
-const DRAW: Record<DrawKind, { day: string; night: string; px: number; clear: number }> = {
-  track: { day: C.tan, night: C.brownDark, px: 1, clear: 0.25 },
-  minor: { day: C.rock, night: C.night, px: 1, clear: 0.3 },
-  road: { day: C.greyLight, night: C.rockDark, px: 2, clear: 0.45 },
-  stream: { day: C.skyLight, night: C.night, px: 1, clear: 0.3 },
-  river: { day: C.sky, night: C.dusk, px: 2, clear: 0.55 },
-};
-export const drawColor = (k: DrawKind, night: boolean) => (night ? DRAW[k].night : DRAW[k].day);
+type DrawKind = 'river' | 'stream' | 'road' | 'minor' | 'street' | 'track';
+/**
+ * Lines are drawn in layers so they read as pixel-art map features: a main road is a dark 3-px band
+ * with a grey core and a dashed centre line; dirt tracks are dotted; rivers also get a real-width
+ * surface (see riverRibbon) that takes over when the camera is close enough for it to be wider.
+ */
+const LAYERS: { kind: DrawKind; day: string; night: string; px: number; dash?: [number, number]; order: number }[] = [
+  { kind: 'street', day: C.rock, night: C.ink2, px: 1, order: 2 },
+  { kind: 'track', day: C.tan, night: C.brownDark, px: 1, dash: [22, 12], order: 2 },
+  { kind: 'minor', day: C.rock, night: C.night, px: 1, order: 2 },
+  { kind: 'road', day: C.rockDark, night: C.ink2, px: 3, order: 3 },
+  { kind: 'road', day: C.rock, night: C.night, px: 1, order: 4 },
+  { kind: 'road', day: C.cream, night: C.rockDark, px: 1, dash: [14, 20], order: 5 },
+  { kind: 'stream', day: C.skyLight, night: C.night, px: 1, order: 2 },
+  { kind: 'river', day: C.sky, night: C.dusk, px: 2, order: 2 },
+];
+/** Canopy cleared either side of each kind, × terrain spacing. */
+const CLEAR: Record<DrawKind, number> = { track: 0.25, street: 0.3, minor: 0.3, road: 0.45, stream: 0.3, river: 0.55 };
+/** Residential lanes / service roads are only drawn this close to the route (the town grid gets busy). */
+const STREET_NEAR = 900;
 
 export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: number, H: number): WaterScene {
   const group = new THREE.Group();
@@ -158,41 +222,110 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
   const inside = (x: number, z: number) => x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1;
   const s = terrain.spacing;
   const lift = s * 0.14;
+  const near = routeProximity(track);
 
-  // rivers / streams: crisp 1–2 px lines draped on the terrain
-  const segs: Record<DrawKind, number[]> = { river: [], stream: [], road: [], minor: [], track: [] };
-  const xzLines: { name: string; pts: [number, number][] }[] = [];
+  const segs: Record<DrawKind, number[]> = { river: [], stream: [], road: [], minor: [], street: [], track: [] };
+  const named: { name: string; pts: [number, number][] }[] = [];
+  const crossable: { pts: [number, number][]; river: boolean }[] = [];
+  const ribbons: { pts: [number, number][]; w: number }[] = [];
+  const lampSrc: { pts: [number, number][]; every: number }[] = [];
+  const paths: MapSprites['paths'] = [];
+  const rapids: number[] = [];
+
   for (const l of data.lines) {
     const kind: DrawKind = l.kind === 'canal' ? 'river' : l.kind;
     const xz = l.pts.map(([la, lo]) => toXZ(la, lo));
-    if (l.name && (kind === 'river' || kind === 'stream')) xzLines.push({ name: l.name, pts: xz });
+    const water = kind === 'river' || kind === 'stream';
+    if (water && l.name) named.push({ name: l.name, pts: xz });
+    if (water) crossable.push({ pts: xz, river: kind === 'river' });
     const out = segs[kind];
+    let run: [number, number][] = [];
+    const flush = () => {
+      if (run.length > 1 && kind === 'river') ribbons.push({ pts: run, w: l.w ?? (l.kind === 'canal' ? 10 : 24) });
+      run = [];
+    };
     for (let i = 1; i < xz.length; i++) {
       const [ax, az] = xz[i - 1], [bx, bz] = xz[i];
-      if (!inside(ax, az) || !inside(bx, bz)) continue;
+      if (!inside(ax, az) || !inside(bx, bz)) { flush(); continue; }
+      if (kind === 'street' && !near(ax, az, STREET_NEAR) && !near(bx, bz, STREET_NEAR)) { flush(); continue; }
       const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / (s / 3)));
+      if (!run.length) run.push([ax, az]);
       for (let k = 0; k < n; k++) {
         const x0 = ax + ((bx - ax) * k) / n, z0 = az + ((bz - az) * k) / n;
         const x1 = ax + ((bx - ax) * (k + 1)) / n, z1 = az + ((bz - az) * (k + 1)) / n;
         out.push(x0, terrain.worldY(x0, z0) + lift, z0, x1, terrain.worldY(x1, z1) + lift, z1);
+        run.push([x1, z1]);
+      }
+    }
+    flush();
+
+    // roads near the route: street lights, and the longer ones get traffic
+    if (kind === 'road' || kind === 'minor' || kind === 'street') {
+      const close = xz.filter(([x, z]) => inside(x, z) && near(x, z, 1500));
+      // lit: main roads and town streets (country lanes into the hills are dark)
+      if (close.length > 1 && kind !== 'minor') lampSrc.push({ pts: xz.filter(([x, z]) => inside(x, z)), every: kind === 'road' ? 90 : 180 });
+      if (kind !== 'street' && close.length > 1) {
+        const p = xz.filter(([x, z]) => inside(x, z));
+        const cum = [0];
+        for (let i = 1; i < p.length; i++) cum.push(cum[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+        const len = cum[cum.length - 1];
+        if (len > 300) {
+          const pts = new Float32Array(p.length * 3);
+          let cx = 0, cz = 0;
+          p.forEach(([x, z], i) => { pts.set([x, terrain.worldY(x, z), z], i * 3); cx += x; cz += z; });
+          cx /= p.length; cz /= p.length;
+          const r = Math.max(...p.map(([x, z]) => Math.hypot(x - cx, z - cz)));
+          paths.push({ pts, cum: Float32Array.from(cum), len, cx, cz, r, main: kind === 'road' });
+        }
+      }
+    }
+    // white water where a stream drops steeply
+    if (water) {
+      let next = 55;
+      for (let i = 1; i < xz.length; i++) {
+        const [ax, az] = xz[i - 1], [bx, bz] = xz[i];
+        const L = Math.hypot(bx - ax, bz - az);
+        let u = next;
+        for (; u < L; u += 110) {
+          const f = u / L, x = ax + (bx - ax) * f, z = az + (bz - az) * f;
+          if (!inside(x, z) || !near(x, z, 2500)) continue;
+          const fx = (bx - ax) / L, fz = (bz - az) / L;
+          const drop = Math.abs(terrain.heightAt(x, z) - terrain.heightAt(x + fx * 40, z + fz * 40)) / 40;
+          if (drop > 0.18) rapids.push(x, terrain.worldY(x, z), z);
+        }
+        next = u - L;
       }
     }
   }
   // rivers and roads cut gaps in the canopy
-  for (const k of Object.keys(DRAW) as DrawKind[]) clearBanks(terrain, segs[k], s * DRAW[k].clear);
+  for (const k of Object.keys(CLEAR) as DrawKind[]) clearBanks(terrain, segs[k], s * CLEAR[k]);
 
   const lineMats: WaterScene['lineMats'] = [];
-  for (const kind of ['track', 'minor', 'road', 'stream', 'river'] as const) {
-    if (!segs[kind].length) continue;
+  for (const ly of LAYERS) {
+    if (!segs[ly.kind].length) continue;
     const g = new LineSegmentsGeometry();
-    g.setPositions(segs[kind]);
-    const mat = new LineMaterial({ color: new THREE.Color(DRAW[kind].day).getHex(), linewidth: DRAW[kind].px, worldUnits: false });
+    g.setPositions(segs[ly.kind]);
+    const mat = new LineMaterial({ color: new THREE.Color(ly.day).getHex(), linewidth: ly.px, worldUnits: false, dashed: !!ly.dash });
+    if (ly.dash) { mat.dashSize = ly.dash[0]; mat.gapSize = ly.dash[1]; }
     mat.resolution.set(W, H);
     const line = new LineSegments2(g, mat);
+    if (ly.dash) line.computeLineDistances();
     line.frustumCulled = false;
-    line.renderOrder = 2;
+    line.renderOrder = ly.order;
     group.add(line);
-    lineMats.push({ mat, kind });
+    lineMats.push({ mat, day: ly.day, night: ly.night });
+  }
+
+  // rivers: a real-width water surface over the pixel line (wins when it's wider than 2 px)
+  let river: WaterScene['river'] = null;
+  let riverMat: THREE.ShaderMaterial | null = null;
+  if (ribbons.length) {
+    riverMat = riverMaterial();
+    river = riverMat.uniforms as unknown as WaterScene['river'];
+    const mesh = new THREE.Mesh(riverRibbon(ribbons, terrain, lift * 1.1), riverMat);
+    mesh.renderOrder = 6;
+    mesh.frustumCulled = false;
+    group.add(mesh);
   }
 
   // lakes / reservoirs: flat lit surfaces at the lowest shore height
@@ -220,16 +353,163 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
     group.add(m);
   }
 
+  // ---- sprite anchors
+  const roadSegs = [...segs.road, ...segs.minor, ...segs.street, ...segs.track];
+  const bridges: MapSprites['bridges'] = [];
+  for (const h of routeCrossings(crossable, track)) {
+    // only where the route is on a road / track: on a jungle trail you wade (or it's a log)
+    if (!nearSegs(roadSegs, h.x, h.z, h.river ? 35 : 25)) continue;
+    if (bridges.some((o) => Math.abs(o.d - h.d) < 150)) continue;
+    bridges.push({ x: h.x, y: terrain.worldY(h.x, h.z) + lift, z: h.z, d: h.d });
+  }
+
+  const lamps: number[] = [];
+  for (const src of lampSrc) {
+    let next = src.every / 2;
+    for (let i = 1; i < src.pts.length && lamps.length < 12000; i++) {
+      const [ax, az] = src.pts[i - 1], [bx, bz] = src.pts[i];
+      const L = Math.hypot(bx - ax, bz - az);
+      let u = next;
+      for (; u < L; u += src.every) {
+        const x = ax + ((bx - ax) * u) / L, z = az + ((bz - az) * u) / L;
+        if (near(x, z, 1500)) lamps.push(x, terrain.worldY(x, z), z);
+      }
+      next = u - L;
+    }
+  }
+
+  const pois: MapSprites['pois'] = [];
+  for (const p of data.pois ?? []) {
+    const [x, z] = toXZ(p.lat, p.lon);
+    if (!inside(x, z)) continue;
+    const at = nearestOnRoute(track, x, z);
+    pois.push({ kind: p.kind, name: p.name, x, y: terrain.worldY(x, z), z, d: at.off < 80 ? at.d : null, near: at });
+  }
+
   return {
     group,
-    crossings: findCrossings(xzLines, track),
+    crossings: findCrossings(named, track),
     lineMats,
+    river,
+    sprites: { bridges, lamps: Float32Array.from(lamps), paths, rapids: Float32Array.from(rapids), pois },
     dispose() {
       group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
       lineMats.forEach((l) => l.mat.dispose());
+      riverMat?.dispose();
       lake.dispose();
     },
   };
+}
+
+/** Flat strip `w` metres wide along each polyline, draped at the centre line's height. */
+function riverRibbon(lines: { pts: [number, number][]; w: number }[], terrain: Terrain, lift: number) {
+  const pos: number[] = [], side: number[] = [], along: number[] = [], idx: number[] = [];
+  for (const { pts, w } of lines) {
+    const base = pos.length / 3;
+    let cum = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const [x, z] = pts[i];
+      if (i) cum += Math.hypot(x - pts[i - 1][0], z - pts[i - 1][1]);
+      const a = pts[Math.max(0, i - 1)], c = pts[Math.min(pts.length - 1, i + 1)];
+      let tx = c[0] - a[0], tz = c[1] - a[1];
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl; tz /= tl;
+      const y = terrain.worldY(x, z) + lift;
+      const hw = w / 2;
+      pos.push(x - tz * hw, y, z + tx * hw, x + tz * hw, y, z - tx * hw);
+      side.push(-1, 1);
+      along.push(cum, cum);
+      if (i) {
+        const k = base + i * 2;
+        idx.push(k - 2, k - 1, k, k - 1, k + 1, k);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aSide', new THREE.Float32BufferAttribute(side, 1));
+  g.setAttribute('aAlong', new THREE.Float32BufferAttribute(along, 1));
+  g.setIndex(idx);
+  return g;
+}
+
+/** Water with lighter banks and glints drifting downstream (OSM rivers are drawn in flow direction). */
+function riverMaterial() {
+  const v3 = (hex: string) => new THREE.Vector3(...rgb01(hex));
+  return new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    uniforms: {
+      ...shared,
+      uWater: { value: v3(C.sky) },
+      uBank: { value: v3(C.sage) },
+      uGlint: { value: 1 },
+      uGlintThr: { value: 0.88 },
+      uGlintCol: { value: v3(C.skyPale) },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aSide; attribute float aAlong;
+      varying vec3 vW; varying float vSide; varying float vAlong;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vW = w.xyz; vSide = aSide; vAlong = aAlong;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      ${LIGHT_GLSL}
+      uniform vec3 uWater; uniform vec3 uBank; uniform float uGlint; uniform float uGlintThr; uniform vec3 uGlintCol;
+      varying vec3 vW; varying float vSide; varying float vAlong;
+      void main() {
+        float s = abs(vSide);
+        vec3 col = shade(s > 0.7 ? uBank : uWater, vec3(0.0, 1.0, 0.0), vW);
+        float h = hash(floor(vec2((vAlong - uTime * 26.0) / 9.0, vSide * 2.0 + 4.0)));
+        if (s < 0.6 && h > uGlintThr) col = mix(col, uGlintCol, uGlint);
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+}
+
+/** Is (x, z) within R metres of the route? (grid of route samples, built once per track) */
+function routeProximity(track: Track) {
+  const cell = 500;
+  const grid = new Map<string, number[]>();
+  const stride = Math.max(1, Math.round(50 / track.step));
+  for (let i = 0; i < track.n; i += stride) {
+    const k = `${Math.floor(track.x[i] / cell)},${Math.floor(track.z[i] / cell)}`;
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+  }
+  return (x: number, z: number, R: number) => {
+    const span = Math.ceil(R / cell);
+    const kx = Math.floor(x / cell), kz = Math.floor(z / cell);
+    for (let dx = -span; dx <= span; dx++) for (let dz = -span; dz <= span; dz++) {
+      for (const i of grid.get(`${kx + dx},${kz + dz}`) ?? []) {
+        if (Math.hypot(track.x[i] - x, track.z[i] - z) < R) return true;
+      }
+    }
+    return false;
+  };
+}
+
+/** Closest route sample to (x, z): its distance along the track and how far off the route the point is. */
+export function nearestOnRoute(track: Track, x: number, z: number) {
+  let best = Infinity, d = 0;
+  for (let i = 0; i < track.n; i++) {
+    const o = Math.hypot(track.x[i] - x, track.z[i] - z);
+    if (o < best) { best = o; d = track.d[i]; }
+  }
+  return { d, off: best };
+}
+
+function nearSegs(segs: number[], x: number, z: number, r: number) {
+  for (let i = 0; i < segs.length; i += 6) {
+    if (Math.abs(segs[i] - x) > r + 60 || Math.abs(segs[i + 2] - z) > r + 60) continue;
+    if (distSeg(x, z, segs[i], segs[i + 2], segs[i + 3], segs[i + 5]) < r) return true;
+  }
+  return false;
 }
 
 /** Rivers cut gaps in the canopy: hide trees standing within `r` of a water line. */
@@ -267,6 +547,36 @@ function distSeg(px: number, pz: number, ax: number, az: number, bx: number, bz:
   const l2 = vx * vx + vz * vz;
   const u = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / l2)) : 0;
   return Math.hypot(px - ax - vx * u, pz - az - vz * u);
+}
+
+/** Every point where the route crosses one of `lines` (x/z of the crossing and distance along the route). */
+function routeCrossings(lines: { pts: [number, number][]; river: boolean }[], t: Track) {
+  const cell = 250;
+  const grid = new Map<string, number[]>();
+  const stride = Math.max(1, Math.round(20 / t.step));
+  for (let i = 0; i + stride < t.n; i += stride) {
+    const kx = Math.floor(t.x[i] / cell), kz = Math.floor(t.z[i] / cell);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const k = `${kx + dx},${kz + dz}`;
+      (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+    }
+  }
+  const hits: { d: number; x: number; z: number; river: boolean }[] = [];
+  for (const l of lines) {
+    for (let j = 1; j < l.pts.length; j++) {
+      const [ax, az] = l.pts[j - 1], [bx, bz] = l.pts[j];
+      const cand = grid.get(`${Math.floor(ax / cell)},${Math.floor(az / cell)}`);
+      if (!cand) continue;
+      for (const i of cand) {
+        const i2 = Math.min(t.n - 1, i + stride);
+        const u = segX(ax, az, bx, bz, t.x[i], t.z[i], t.x[i2], t.z[i2]);
+        if (u == null) continue;
+        hits.push({ d: t.d[i] + (t.d[i2] - t.d[i]) * u, x: t.x[i] + (t.x[i2] - t.x[i]) * u, z: t.z[i] + (t.z[i2] - t.z[i]) * u, river: l.river });
+      }
+    }
+  }
+  // rivers first, so a river and a stream at the same spot keep the river's bridge
+  return hits.sort((a, b) => Number(b.river) - Number(a.river) || a.d - b.d);
 }
 
 /** Where the route crosses each named river/stream (each name at most once per 15 km). */
@@ -324,7 +634,7 @@ export function routeSurface(data: WaterData, track: Track): SurfaceInfo {
   const cell = 60, near = 22;
   const grid = new Map<string, [number, number, number, number, Surface][]>();
   for (const l of data.lines) {
-    if (l.kind !== 'road' && l.kind !== 'minor' && l.kind !== 'track') continue;
+    if (l.kind !== 'road' && l.kind !== 'minor' && l.kind !== 'street' && l.kind !== 'track') continue;
     const kind: Surface = l.kind === 'track' ? 'track' : 'road';
     const xz = l.pts.map(([la, lo]) => toXZ(la, lo));
     for (let i = 1; i < xz.length; i++) {

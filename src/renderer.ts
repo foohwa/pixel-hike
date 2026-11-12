@@ -4,13 +4,14 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
 import type { GateOptions } from './gate';
-import { clockText, drawOverlay, type DecorFrame, type DecorItem, type DialState, type EventLogo, type ScreenPoint } from './overlay';
+import { openness } from './landmarks';
+import { clockText, drawOverlay, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
-import { buildWater, drawColor, type WaterData, type WaterScene } from './water';
+import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
@@ -56,6 +57,8 @@ export interface EnvOptions {
   light: boolean;
   /** Draw rivers + lakes and announce named river crossings. */
   water: boolean;
+  /** Viewpoint camera moves, camp / spring / waterfall markers (OSM landmarks). */
+  landmarks: boolean;
 }
 
 interface Rig {
@@ -90,6 +93,8 @@ export class PixelRenderer {
   private facingLeft = false;
   private sunEvents: SunEvent[] = [];
   private toasts: { text: string; t: number }[] = [];
+  /** Compass direction of the best outlook at each viewpoint checkpoint (cached per checkpoint). */
+  private viewDir = new Map<string, number>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -260,16 +265,49 @@ export class PixelRenderer {
         this.toasts.push({ text: ZONE_LABEL[run.style].toUpperCase(), t: Math.max(t, data.timeline.gateIn + data.timeline.intro) });
       }
     }
+    const t0 = data.timeline.gateIn + data.timeline.intro;
+    const soft = new Set<{ text: string; t: number }>();
     if (data.env.water && this.water) {
       for (const c of this.water.scene.crossings) {
         const t = data.timeline.videoTimeAtDistance(c.d);
         if (t == null) continue;
-        this.toasts.push({ text: c.name.toUpperCase().slice(0, 30), t: Math.max(t, data.timeline.gateIn + data.timeline.intro) });
+        this.toasts.push({ text: c.name.toUpperCase().slice(0, 30), t: Math.max(t, t0) });
+      }
+    }
+    if (data.env.landmarks && this.water) {
+      const cps = data.checkpoints.filter((c) => c.enabled);
+      for (const p of this.water.scene.sprites.pois) {
+        // a waterfall a short detour away: mention it as we pass closest
+        if (p.d == null && p.kind === 'waterfall' && p.near.off < 2500) {
+          const t = data.timeline.videoTimeAtDistance(p.near.d);
+          if (t == null) continue;
+          const km = (p.near.off * data.track.distScale) / 1000;
+          const toast = { text: `${(p.name || 'WATERFALL').toUpperCase().slice(0, 20)} ${km.toFixed(1)}KM AWAY`, t: Math.max(t, t0) };
+          this.toasts.push(toast);
+          soft.add(toast);
+          continue;
+        }
+        if (p.d == null) continue;
+        const named = p.kind === 'camp' && p.name;
+        if (!named && p.kind !== 'waterfall') continue;
+        if (cps.some((c) => Math.abs(c.d - p.d!) < 300)) continue; // a checkpoint banner already says where we are
+        const t = data.timeline.videoTimeAtDistance(p.d);
+        if (t == null) continue;
+        const toast = { text: (p.name || 'WATERFALL').toUpperCase().slice(0, 30), t: Math.max(t, t0) };
+        this.toasts.push(toast);
+        if (p.kind === 'camp') soft.add(toast); // camps come in clusters: skip any that would show up late
       }
     }
     // one toast at a time: nudge later ones so they don't overlap
     this.toasts.sort((a, b) => a.t - b.t);
-    for (let i = 1; i < this.toasts.length; i++) this.toasts[i].t = Math.max(this.toasts[i].t, this.toasts[i - 1].t + 2.4);
+    const kept: typeof this.toasts = [];
+    for (const toast of this.toasts) {
+      const last = kept[kept.length - 1];
+      const t = last ? Math.max(toast.t, last.t + 2.4) : toast.t;
+      if (soft.has(toast) && t - toast.t > 1.2) continue;
+      kept.push({ text: toast.text, t });
+    }
+    this.toasts = kept;
   }
 
   /** (Re)build the river / lake meshes when the data or the diorama changes. */
@@ -470,6 +508,7 @@ export class PixelRenderer {
       const h = (r.camDist * 1.5) / Math.tan((FOV_2D * Math.PI) / 360);
       follow.pos.set(follow.target.x, follow.target.y + h, follow.target.z + 0.01);
     }
+    if (!is2d && st.phase === 'pause' && st.pauseCp?.kind === 'view' && this.data.env.landmarks) this.lookAround(follow, st);
     let u = 1;
     let over = this.overviewPos('start', 0);
     if (st.phase === 'gateStart') {
@@ -516,7 +555,15 @@ export class PixelRenderer {
     terrain.mist.uMistClear.value = r.camDist * 0.55;
     if (this.water) {
       const dark = sky.lamp > 0.5;
-      for (const l of this.water.scene.lineMats) l.mat.color.set(drawColor(l.kind, dark));
+      for (const l of this.water.scene.lineMats) l.mat.color.set(dark ? l.night : l.day);
+      const rv = this.water.scene.river;
+      if (rv) {
+        // sun sparkle by day; at night only a bright, risen moon glints on the water
+        const illum = (1 - Math.cos(2 * Math.PI * moonPhase(ms))) / 2;
+        rv.uGlint.value = !dark ? 1 : mp.elevation > 0.05 && illum > 0.3 ? 1 : 0;
+        rv.uGlintCol.value.set(...rgb01(dark ? C.cream : C.skyPale));
+        rv.uGlintThr.value = dark ? 0.95 : 0.88;
+      }
     }
 
     // ---- trail progress
@@ -548,6 +595,7 @@ export class PixelRenderer {
     }
 
     const decor = this.decorFrame(st, hiker);
+    const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
     const petAt = this.data.pet
       ? { x: hiker.x + (this.facingLeft ? 11 : -11), y: hiker.y + 1, visible: hiker.visible }
@@ -578,6 +626,7 @@ export class PixelRenderer {
       gate: this.data.gate,
       zones: this.data.zones,
       decor,
+      map,
       env: this.data.env,
     });
     this.overlayTex.needsUpdate = true;
@@ -703,6 +752,118 @@ export class PixelRenderer {
   }
 
   /**
+   * At a viewpoint: the camera eases back, swings round towards the most open direction and lifts
+   * its gaze over the hiker, then returns — a couple of seconds to take in the view.
+   */
+  private lookAround(follow: { pos: THREE.Vector3; target: THREE.Vector3 }, st: TimelineState) {
+    const { track, terrain } = this.data!;
+    const cp = st.pauseCp!;
+    let dir = this.viewDir.get(cp.id + ':' + Math.round(cp.d));
+    if (dir == null) {
+      dir = openness(track, terrain, cp.d).dir;
+      this.viewDir.set(cp.id + ':' + Math.round(cp.d), dir);
+    }
+    const b = (1 - Math.cos(2 * Math.PI * st.pauseU)) / 2; // 0 → 1 → 0, smooth at both ends
+    const r = this.rig!;
+    const off = follow.pos.clone().sub(follow.target);
+    // current looking direction vs. the view's direction (both as compass angles)
+    const look = Math.atan2(-off.x, off.z);
+    let delta = dir - look;
+    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+    const turn = clamp(delta, -1.3, 1.3) * b;
+    const c = Math.cos(turn), sn = Math.sin(turn);
+    const ox = off.x * c - off.z * sn, oz = off.x * sn + off.z * c;
+    const k = 1 + 0.55 * b;
+    const ahead = r.camDist * 0.7 * b;
+    const vx = Math.sin(dir), vz = -Math.cos(dir);
+    follow.target.set(follow.target.x + vx * ahead, follow.target.y - r.camDist * 0.08 * b, follow.target.z + vz * ahead);
+    follow.pos.set(follow.target.x - vx * ahead + ox * k, follow.target.y + off.y * (k - 0.25 * b), follow.target.z - vz * ahead + oz * k);
+    const ground = terrain.worldY(follow.pos.x, follow.pos.z) + r.camDist * 0.12;
+    if (follow.pos.y < ground) follow.pos.y = ground;
+  }
+
+  /** Bridges, traffic, street lights, white water and landmarks visible this frame (screen positions). */
+  private mapFrame(st: TimelineState, hx: number, hz: number, night: boolean): MapFrame | null {
+    const w = this.water;
+    if (!w || st.phase === 'gateStart' || st.phase === 'gateFinish') return null;
+    const { env, track } = this.data!;
+    const sp = w.scene.sprites;
+    const is2d = this.mode === '2d';
+    const cam = this.camera.position;
+    const R = this.rig!.camDist;
+    const W = this.W, H = this.H;
+    const vis = (x: number, y: number, z: number, maxQ: number) => {
+      const q = is2d ? Math.hypot(x - hx, z - hz) / (R * 3) : Math.hypot(x - cam.x, y - cam.y, z - cam.z) / R;
+      if (q > maxQ) return null;
+      const p = this.projectF(x, y, z);
+      if (!p.visible || p.x < -8 || p.x > W + 8 || p.y < -8 || p.y > H + 8) return null;
+      if (!is2d && this.occluded(x, y, z)) return null;
+      return { x: Math.round(p.x), y: Math.round(p.y), q: is2d ? 2.4 : q };
+    };
+    const out: MapFrame = { lamps: [], rapids: [], bridges: [], vehicles: [], falls: [], camps: [], springs: [] };
+
+    if (env.water) {
+      if (night) {
+        const L = sp.lamps;
+        for (let i = 0; i < L.length && out.lamps.length < 1500; i += 3) {
+          const v = vis(L[i], L[i + 1], L[i + 2], 3);
+          if (v) out.lamps.push(v);
+        }
+      }
+      const Rp = sp.rapids;
+      for (let i = 0; i < Rp.length; i += 3) {
+        const v = vis(Rp[i], Rp[i + 1], Rp[i + 2], 1.3);
+        if (v) out.rapids.push(v);
+      }
+      for (const b of sp.bridges) {
+        const v = vis(b.x, b.y, b.z, 2.4);
+        if (!v) continue;
+        const a = this.projectF(sampleAt(track, track.x, b.d - 20), b.y, sampleAt(track, track.z, b.d - 20));
+        const c = this.projectF(sampleAt(track, track.x, b.d + 20), b.y, sampleAt(track, track.z, b.d + 20));
+        let tx = c.x - a.x, ty = c.y - a.y;
+        const l = Math.hypot(tx, ty);
+        if (l < 1e-3) { tx = 1; ty = 0; } else { tx /= l; ty /= l; }
+        out.bridges.push({ ...v, tx, ty });
+      }
+      // a little traffic on the roads nearest the hiker
+      const reach = R * (is2d ? 4 : 2.5);
+      const near = sp.paths
+        .map((p, i) => ({ p, i, gap: Math.hypot(p.cx - hx, p.cz - hz) - p.r }))
+        .filter((e) => e.gap < reach)
+        .sort((a, b) => a.gap - b.gap)
+        .slice(0, 6);
+      const COLORS = [C.red, C.sky, C.white, C.yellow, C.greenLight, C.orange];
+      for (const { p, i } of near) {
+        const n = p.main && p.len > 2000 ? 2 : 1;
+        for (let v = 0; v < n; v++) {
+          const rnd = rng(i * 7 + v + 1);
+          const dirn = rnd() < 0.5 ? 1 : -1;
+          const speed = R * (p.main ? 0.09 : 0.055) * (0.8 + rnd() * 0.4);
+          const s0 = rnd() * p.len;
+          const s = (((s0 + dirn * st.t * speed) % p.len) + p.len) % p.len;
+          const at = pathPoint(p, s), ahead = pathPoint(p, clamp(s + dirn * 12, 0, p.len));
+          const q = vis(at[0], at[1], at[2], 2.2);
+          if (!q) continue;
+          const f = this.projectF(ahead[0], ahead[1], ahead[2]);
+          out.vehicles.push({ x: q.x, y: q.y, left: f.x < q.x - 0.01, moto: rnd() < 0.4, color: COLORS[Math.floor(rnd() * COLORS.length)] });
+        }
+      }
+    }
+    if (env.landmarks) {
+      for (const p of sp.pois) {
+        if (p.kind === 'waterfall') {
+          const v = vis(p.x, p.y, p.z, 3.5);
+          if (v) out.falls.push(v);
+        } else if (p.d != null && (p.kind === 'camp' || p.kind === 'spring')) {
+          const v = vis(p.x, p.y, p.z, p.kind === 'camp' ? 2.2 : 1.8);
+          if (v) (p.kind === 'camp' ? out.camps : out.springs).push(v);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
    * Props along the trail for this frame: ferns / moss / boulders by elevation zone, roots and rock
    * steps on steep ground, fixed ropes beside technical stretches and a warning sign where one starts.
    * Placed at fixed track distances (so they don't swim) and offset sideways in screen pixels so they
@@ -794,6 +955,19 @@ export class PixelRenderer {
     items.sort((p, q) => p.y - q.y);
     return { items, ropes, signs };
   }
+}
+
+/** World x/y/z at arc length s along a road path. */
+function pathPoint(p: { pts: Float32Array; cum: Float32Array }, s: number): [number, number, number] {
+  const c = p.cum;
+  let lo = 0, hi = c.length - 1;
+  while (hi - lo > 1) {
+    const m = (lo + hi) >> 1;
+    if (c[m] <= s) lo = m; else hi = m;
+  }
+  const f = c[hi] > c[lo] ? (s - c[lo]) / (c[hi] - c[lo]) : 0;
+  const a = lo * 3, b = hi * 3, P = p.pts;
+  return [P[a] + (P[b] - P[a]) * f, P[a + 1] + (P[b + 1] - P[a + 1]) * f, P[a + 2] + (P[b + 2] - P[a + 2]) * f];
 }
 
 function ease(x: number) {

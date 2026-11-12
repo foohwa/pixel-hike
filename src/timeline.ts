@@ -5,7 +5,7 @@ export const PAUSE_SECONDS: Record<Checkpoint['kind'], number> = {
   start: 0,
   summit: 2.8,
   peak: 1.8,
-  view: 1.6,
+  view: 2.6, // time to look around (the camera swings towards the view)
   rest: 1.4,
   camp: 3.6, // long enough to time-lapse a night
   cp: 1.2,
