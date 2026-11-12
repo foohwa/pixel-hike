@@ -8,7 +8,7 @@ import { loadTiles } from './osmtiles';
 import { C, rgb01 } from './palette';
 import { LIGHT_GLSL, litMaterial, shared, type Terrain } from './terrain';
 import { buildFalls, type FallSite } from './falls3d';
-import { clamp, sampleAt, type Track } from './track';
+import { followDistance, sampleAt, type Track } from './track';
 
 /**
  * Rivers, streams, lakes, roads and a few landmarks (waterfalls, viewpoints, peaks, camps, springs)
@@ -522,8 +522,7 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
  * distance; one on the trail sits just beside it; farther ones stay where they are, a bit smaller.
  */
 function fallSites(pois: MapSprites['pois'], track: Track): FallSite[] {
-  const b = track.bounds;
-  const camDist = clamp(Math.max(b.maxX - b.minX, b.maxZ - b.minZ) * 0.1, 500, 2600); // same as the renderer's rig
+  const camDist = followDistance(track);
   const H = camDist * 0.115;
   const out: FallSite[] = [];
   for (const p of pois) {

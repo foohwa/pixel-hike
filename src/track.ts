@@ -431,6 +431,12 @@ export function distAtCost(t: Track, c: number): number {
 
 // --- math ---------------------------------------------------------------
 
+/** Distance of the follow camera from the hiker (world units): set pieces are sized to read at it. */
+export function followDistance(t: Pick<Track, 'bounds'>) {
+  const b = t.bounds;
+  return clamp(Math.max(b.maxX - b.minX, b.maxZ - b.minZ) * 0.1, 500, 2600);
+}
+
 export function clamp(v: number, a: number, b: number) {
   return v < a ? a : v > b ? b : v;
 }

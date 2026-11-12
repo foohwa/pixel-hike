@@ -74,6 +74,8 @@ export interface OverlayInput {
   /** Props along the trail for this frame (see PixelRenderer.decorFrame), or null. */
   decor: DecorFrame | null;
   map: MapFrame | null;
+  /** Checkpoints built into the 3D scene (sites3d.ts): no sprite for these. */
+  sited: Set<string> | null;
   env: EnvOptions;
 }
 
@@ -410,6 +412,7 @@ function drawWorldSprites(o: OverlayInput) {
         drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
         break;
       case 'cp':
+        if (o.sited?.has(cp.id)) break;
         if (o.env.signs) drawSprite(ctx, AID_TENT, p.x + 17, p.y + 1, { keys: AID_KEYS });
         else drawSprite(ctx, AID, p.x + 15, p.y);
         break;

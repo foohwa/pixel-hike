@@ -10,7 +10,8 @@ import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
-import { clamp, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { clamp, followDistance, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { buildSites, hasSite, type Sites } from './sites3d';
 import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 
@@ -84,6 +85,8 @@ export class PixelRenderer {
   private rig: Rig | null = null;
   private trail: { group: THREE.Group; done: Line2; step: number; mats: LineMaterial[] } | null = null;
   private water: { scene: WaterScene; data: WaterData; terrain: Terrain } | null = null;
+  /** Checkpoint set pieces in 3D (aid stations…), rebuilt when the checkpoints or the diorama change. */
+  private sites: { sites: Sites; key: string; terrain: Terrain } | null = null;
 
   mode: ViewMode = '3d';
   aspect: Aspect = 'landscape';
@@ -250,6 +253,7 @@ export class PixelRenderer {
     }
     this.data = data;
     this.syncWater(data);
+    this.syncSites(data);
     this.toasts = [];
     for (const ev of this.sunEvents) {
       const t = data.timeline.videoTimeAtClock(ev.ms);
@@ -308,6 +312,19 @@ export class PixelRenderer {
       kept.push({ text: toast.text, t });
     }
     this.toasts = kept;
+  }
+
+  private syncSites(data: SceneData) {
+    const key = data.checkpoints.filter(hasSite).map((c) => `${c.id}@${Math.round(c.d)}`).join('|');
+    const s = this.sites;
+    if (s && s.key === key && s.terrain === data.terrain) return;
+    if (s) {
+      this.scene.remove(s.sites.group);
+      s.sites.dispose();
+    }
+    const sites = buildSites(data.checkpoints, data.track, data.terrain);
+    this.scene.add(sites.group);
+    this.sites = { sites, key, terrain: data.terrain };
   }
 
   /** (Re)build the river / lake meshes when the data or the diorama changes. */
@@ -404,9 +421,7 @@ export class PixelRenderer {
     const { track, terrain } = this.data!;
     const K = Math.min(track.n, 2500);
     const stride = (track.n - 1) / (K - 1);
-    const b = track.bounds;
-    const extent = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
-    const camDist = clamp(extent * 0.1, 500, 2600);
+    const camDist = followDistance(track);
     const pitch = (21 * Math.PI) / 180;
     const yawOff = 0.55;
     const hor = camDist * Math.cos(pitch), ver = camDist * Math.sin(pitch);
@@ -553,6 +568,10 @@ export class PixelRenderer {
     if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
     terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
+    if (this.sites) {
+      this.sites.sites.group.visible = env.signs && !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
+      this.sites.sites.update(clamp((sky.lamp - 0.3) / 0.4, 0, 1));
+    }
     if (this.water?.scene.falls) {
       this.water.scene.falls.visible = env.landmarks && !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
     }
@@ -632,6 +651,7 @@ export class PixelRenderer {
       zones: this.data.zones,
       decor,
       map,
+      sited: !is2d && env.signs ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,
     });
     this.overlayTex.needsUpdate = true;
@@ -886,6 +906,8 @@ export class PixelRenderer {
             if (s) out.sideFalls.push(s);
           }
         } else if (p.d != null && (p.kind === 'camp' || p.kind === 'spring')) {
+          // a checkpoint at the same spot already marks it (and its tent would clash with the sign)
+          if (p.kind === 'camp' && this.data!.checkpoints.some((c) => c.enabled && c.kind !== 'start' && Math.abs(c.d - p.d!) < 300)) continue;
           const v = vis(p.x, p.y, p.z, p.kind === 'camp' ? 2.2 : 1.8);
           if (v) (p.kind === 'camp' ? out.camps : out.springs).push(v);
         }
