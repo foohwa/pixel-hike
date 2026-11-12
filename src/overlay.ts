@@ -402,6 +402,11 @@ function drawWorldSprites(o: OverlayInput) {
     if (!p || !p.visible) continue;
     const reachT = timeline.reachTimes.get(cp.id);
     const reached = cp.kind === 'start' || (reachT != null && t >= reachT && state.phase !== 'intro');
+    if (o.sited?.has(cp.id)) {
+      // built into the 3D scene (sites3d.ts); only the summit's name board shows while you stand there
+      if (o.env.signs && (cp.kind === 'summit' || cp.kind === 'peak') && state.phase === 'pause' && state.pauseCp?.id === cp.id) drawSummitSign(ctx, cp, p.x, p.y, o.W);
+      continue;
+    }
     switch (cp.kind) {
       // props sit just beside the trail so the characters don't cover them
       case 'camp':
@@ -412,7 +417,6 @@ function drawWorldSprites(o: OverlayInput) {
         drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
         break;
       case 'cp':
-        if (o.sited?.has(cp.id)) break;
         if (o.env.signs) drawSprite(ctx, AID_TENT, p.x + 17, p.y + 1, { keys: AID_KEYS });
         else drawSprite(ctx, AID, p.x + 15, p.y);
         break;

@@ -315,14 +315,14 @@ export class PixelRenderer {
   }
 
   private syncSites(data: SceneData) {
-    const key = data.checkpoints.filter(hasSite).map((c) => `${c.id}@${Math.round(c.d)}`).join('|');
+    const key = data.checkpoints.filter(hasSite).map((c) => `${c.id}:${c.kind}@${Math.round(c.d)}`).join('|') + JSON.stringify(data.gate);
     const s = this.sites;
     if (s && s.key === key && s.terrain === data.terrain) return;
     if (s) {
       this.scene.remove(s.sites.group);
       s.sites.dispose();
     }
-    const sites = buildSites(data.checkpoints, data.track, data.terrain);
+    const sites = buildSites(data.checkpoints, data.track, data.terrain, data.gate);
     this.scene.add(sites.group);
     this.sites = { sites, key, terrain: data.terrain };
   }
@@ -569,8 +569,14 @@ export class PixelRenderer {
     terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
     if (this.sites) {
-      this.sites.sites.group.visible = env.signs && !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
-      this.sites.sites.update(clamp((sky.lamp - 0.3) / 0.4, 0, 1));
+      this.sites.sites.group.visible = !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
+      this.sites.sites.update(clamp((sky.lamp - 0.3) / 0.4, 0, 1), env.signs, (id) => {
+        const cp = checkpoints.find((c) => c.id === id);
+        const reachT = timeline.reachTimes.get(id);
+        if (cp?.kind === 'start') return { reached: true, raise: 1 };
+        const reached = reachT != null && st.t >= reachT && st.phase !== 'intro';
+        return { reached, raise: reached ? clamp((st.t - reachT!) / 0.5, 0, 1) : 0 };
+      });
     }
     if (this.water?.scene.falls) {
       this.water.scene.falls.visible = env.landmarks && !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
@@ -651,7 +657,7 @@ export class PixelRenderer {
       zones: this.data.zones,
       decor,
       map,
-      sited: !is2d && env.signs ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
+      sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,
     });
     this.overlayTex.needsUpdate = true;

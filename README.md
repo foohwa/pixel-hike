@@ -64,7 +64,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/export.ts` | Deterministic frame-by-frame render → WebCodecs H.264 (+ AAC audio) → MP4 (mp4-muxer) |
 | `src/audio.ts` | Bundled tracks, soundtrack rendering (OfflineAudioContext loop + fades), preview player / clock |
 | `src/gate.ts` | Start/finish arch scenes (pixel stage, countdown, dissolve) and the mini arch for the map |
-| `src/sites3d.ts` | Checkpoint set pieces built into the 3D terrain (aid station: clearing, striped canopy, table, feather flag; lit at night) |
+| `src/sites3d.ts` | Checkpoint set pieces built into the 3D terrain: aid station (red gazebos), camp (tents, fire ring), rest bench, summit cairn + signboard, viewpoint deck, start/finish arch; real flags that raise on arrival; lit at night |
 | `src/falls3d.ts` | 3D waterfall (rock cliff, animated water curtain, splash pool) set into the terrain |
 | `src/landmarks.ts` | Viewpoint finder (OSM viewpoints + terrain openness) and naming checkpoints after mapped peaks / camps |
 | `src/zones.ts` | Elevation zones + technical stretches, trail-side prop sprites (placed per frame in `renderer.ts`) |
