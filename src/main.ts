@@ -832,8 +832,8 @@ function renderStats() {
   if (s.avgTemp != null) items.push(['Avg temp', `${Math.round(s.avgTemp)} °C`]);
   if (state.surface && state.track === tr) {
     const k = state.surface.km;
-    const parts = [['trail', k.trail], ['tar road', k.road], ['dirt track', k.track]] as const;
-    items.push(['Surface', parts.filter(([, v]) => v >= 0.1).map(([n, v]) => `${n} ${v.toFixed(1)} km`).join(' · ')]);
+    const parts = [['trail', k.trail], ['road', k.road], ['track', k.track]] as const;
+    items.push(['Surface', parts.filter(([, v]) => v >= 0.1).map(([n, v]) => `${n} ${v.toFixed(1)}`).join(' · ') + ' km']);
   }
   items.push(['Looks like', ACTIVITY_LABEL[guessActivity(tr)]]);
   ui.stats.innerHTML = items.map(([k, v]) => `<div>${k} <b>${v}</b></div>`).join('');
@@ -848,9 +848,16 @@ function bindSeg(el: HTMLElement, onPick: (v: string) => void) {
   });
 }
 
+// keep the preview as big as its space allows whenever that space changes (window, sidebar, stats…)
+new ResizeObserver(() => fitCanvas()).observe(ui.screen);
+
 function fitCanvas() {
   const box = ui.screen.getBoundingClientRect();
-  const s = Math.max(1, Math.floor(Math.min((box.width - 8) / renderer.W, (box.height - 8) / renderer.H)));
+  // whole *device* pixels per game pixel keeps it crisp; on a Retina screen (2 device px per CSS px)
+  // that allows half steps (2.5×, 3.5×…), so the preview can use more of its space
+  const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+  const fit = Math.min((box.width - 8) / renderer.W, (box.height - 8) / renderer.H);
+  const s = Math.max(1, Math.floor(fit * dpr) / dpr);
   ui.canvas.style.width = `${renderer.W * s}px`;
   ui.canvas.style.height = `${renderer.H * s}px`;
 }
