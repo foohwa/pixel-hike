@@ -18,9 +18,13 @@ export const OUTRO_SECONDS = 4.4;
 export const GATE_IN_SECONDS = 4.4;
 export const GATE_OUT_SECONDS = 3.8;
 
+/** A stop for one of your photos (see moments.ts): the walker waits while the polaroid shows. */
+export interface PhotoStop { id: string; d: number; time: number | null; seconds: number }
+
 type Event =
   | { kind: 'move'; t0: number; t1: number; c0: number; c1: number; minClock: number }
-  | { kind: 'pause'; t0: number; t1: number; cp: Checkpoint };
+  | { kind: 'pause'; t0: number; t1: number; cp: Checkpoint }
+  | { kind: 'photo'; t0: number; t1: number; photo: PhotoStop; clock: number };
 
 export interface TimelineState {
   t: number;
@@ -36,6 +40,8 @@ export interface TimelineState {
   gateU: number;
   pauseCp: Checkpoint | null;
   pauseU: number;
+  /** Stopped for a photo: which one and how far through (phase is 'pause', pauseCp null). */
+  photo: { id: string; u: number } | null;
   lastReached: { cp: Checkpoint; t: number } | null;
 }
 
@@ -47,8 +53,8 @@ export function defaultDuration(track: Track) {
 
 export class Timeline {
   readonly duration: number;
-  readonly intro = INTRO_SECONDS;
-  readonly outro = OUTRO_SECONDS;
+  readonly intro: number = INTRO_SECONDS;
+  readonly outro: number = OUTRO_SECONDS;
   readonly gateIn: number;
   readonly gateOut: number;
   readonly events: Event[] = [];
@@ -59,17 +65,29 @@ export class Timeline {
   private distSamples: Float64Array | null = null;
   private static readonly SAMPLE_HZ = 20;
 
-  constructor(track: Track, checkpoints: Checkpoint[], duration: number, opts: { gates?: boolean } = {}) {
+  readonly photoTimes = new Map<string, number>();
+
+  constructor(
+    track: Track,
+    checkpoints: Checkpoint[],
+    duration: number,
+    opts: { gates?: boolean; photos?: PhotoStop[]; intro?: number; outro?: number } = {},
+  ) {
+    if (opts.intro != null) this.intro = opts.intro;
+    if (opts.outro != null) this.outro = opts.outro;
     this.track = track;
     this.duration = duration;
     this.gateIn = opts.gates ? GATE_IN_SECONDS : 0;
     this.gateOut = opts.gates ? GATE_OUT_SECONDS : 0;
 
-    const stops = checkpoints
-      .filter((c) => c.enabled && c.kind !== 'start')
-      .sort((a, b) => a.d - b.d);
+    // checkpoints and photo stops in order along the track (a photo at a checkpoint comes after it)
+    type Stop = { cp: Checkpoint; photo?: undefined; d: number; s: number } | { cp?: undefined; photo: PhotoStop; d: number; s: number };
+    const stops: Stop[] = [
+      ...checkpoints.filter((c) => c.enabled && c.kind !== 'start').map((cp): Stop => ({ cp, d: cp.d, s: PAUSE_SECONDS[cp.kind] })),
+      ...(opts.photos ?? []).map((photo): Stop => ({ photo, d: clamp(photo.d, 0, track.stats.distance), s: photo.seconds })),
+    ].sort((a, b) => a.d - b.d || (a.cp ? -1 : 1));
 
-    let pauseTotal = stops.reduce((s, c) => s + PAUSE_SECONDS[c.kind], 0);
+    let pauseTotal = stops.reduce((s, c) => s + c.s, 0);
     const available = duration - this.gateIn - this.intro - this.gateOut - this.outro;
     const maxPause = available * 0.35;
     const pauseScale = pauseTotal > maxPause ? maxPause / pauseTotal : 1;
@@ -80,17 +98,23 @@ export class Timeline {
     let t = this.gateIn + this.intro;
     let c = 0;
     let minClock = track.stats.startTime; // clock never runs backwards after a time-lapsed stay
-    for (const cp of stops) {
-      const cc = track.cost[Math.min(track.n - 1, Math.round(cp.d / track.step))];
+    for (const stop of stops) {
+      const cc = Math.max(c, track.cost[Math.min(track.n - 1, Math.round(stop.d / track.step))]);
       const dt = moveTotal * (cc - c);
       if (dt > 0.001) this.events.push({ kind: 'move', t0: t, t1: t + dt, c0: c, c1: cc, minClock });
       t += Math.max(0, dt);
       c = cc;
-      const p = PAUSE_SECONDS[cp.kind] * pauseScale;
-      this.events.push({ kind: 'pause', t0: t, t1: t + p, cp });
-      this.reachTimes.set(cp.id, t);
+      const p = stop.s * pauseScale;
+      if (stop.cp) {
+        this.events.push({ kind: 'pause', t0: t, t1: t + p, cp: stop.cp });
+        this.reachTimes.set(stop.cp.id, t);
+        minClock = Math.max(minClock, stop.cp.leaveTime);
+      } else {
+        const clock = Math.max(minClock, sampleAt(track, track.time, stop.d));
+        this.events.push({ kind: 'photo', t0: t, t1: t + p, photo: stop.photo, clock });
+        this.photoTimes.set(stop.photo.id, t);
+      }
       t += p;
-      minClock = Math.max(minClock, cp.leaveTime);
     }
     if (c < 1) {
       const dt = moveTotal * (1 - c);
@@ -117,6 +141,7 @@ export class Timeline {
       gateU: 0,
       pauseCp: null,
       pauseU: 0,
+      photo: null,
       lastReached: null,
     };
 
@@ -134,6 +159,9 @@ export class Timeline {
     for (const e of this.events) {
       if (t < e.t0 || t >= e.t1) continue;
       const u = (t - e.t0) / (e.t1 - e.t0);
+      if (e.kind === 'photo') {
+        return { ...base, phase: 'pause', d: clamp(e.photo.d, 0, tr.stats.distance), photo: { id: e.photo.id, u }, clockMs: e.clock };
+      }
       if (e.kind === 'pause') {
         // time-lapse through the stay (a night at camp, a long lunch…)
         const s = u * u * (3 - 2 * u);

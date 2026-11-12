@@ -1,3 +1,4 @@
+import type { Bubble, Photo } from './moments';
 import type { Checkpoint, Track } from './track';
 
 /**
@@ -14,6 +15,9 @@ export interface SavedState {
   pins: Checkpoint[];
   /** Distances (m) of auto checkpoints the user deleted. */
   tombstones: number[];
+  /** Your photos (small JPEG copies) and speech bubbles. */
+  photos?: Photo[];
+  bubbles?: Bubble[];
 }
 
 const NEAR = 200; // metres: a pin/tombstone hides auto checkpoints this close

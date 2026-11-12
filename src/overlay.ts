@@ -10,6 +10,7 @@ import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './t
 import { DECOR_KEYS, WARN_SIGN, ZONE_COLOR, type TrailZones } from './zones';
 import type { EnvOptions } from './renderer';
 import { drawEffortFx, tintFrame, type EffortFx } from './effort';
+import { drawBubble, drawPolaroid, type PhotoArt } from './moments';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
 
@@ -90,6 +91,10 @@ export interface OverlayInput {
   effort: EffortFx;
   /** Animation clock for the walker (slower when flat out). */
   heroT: number;
+  /** Speech bubbles and when each shows. */
+  bubbles: { text: string; t: number }[];
+  /** Stopped for one of your photos: the polaroid, its caption and how far through (0..1). */
+  photo: { art: PhotoArt; caption: string; u: number } | null;
 }
 
 export interface EventLogo {
@@ -133,8 +138,19 @@ export function drawOverlay(o: OverlayInput) {
   drawBadge(o);
   drawToasts(o);
   drawBanner(o);
+  drawSpeech(o);
+  if (o.photo) drawPolaroid(ctx, o.photo.art, o.photo.caption, o.photo.u, W, H, o.heroAt);
   drawTitleCard(o);
   drawOutroCard(o);
+}
+
+function drawSpeech(o: OverlayInput) {
+  const h = o.heroAt;
+  if (!h.visible || o.photo || (o.state.phase !== 'move' && o.state.phase !== 'pause')) return;
+  // a checkpoint banner across the top? then the bubble goes beside the walker
+  const lr = o.state.lastReached;
+  const banner = !!lr && lr.cp.kind !== 'start' && (o.state.phase === 'pause' ? o.state.pauseCp === lr.cp : o.state.t - lr.t < 0.35);
+  for (const b of o.bubbles) drawBubble(o.ctx, b.text, h.x, h.y, o.state.t - b.t, o.W, o.H, banner);
 }
 
 // ---------------------------------------------------------------- animation choice
@@ -144,6 +160,7 @@ export function pickAnim(o: Pick<OverlayInput, 'state' | 'track' | 'activity' | 
   const { state, track } = o;
   if (state.phase === 'intro' || state.phase === 'gateStart') return 'idle';
   if (state.phase === 'outro' || state.phase === 'gateFinish') return 'cheer';
+  if (state.photo) return 'idle';
   if (state.phase === 'pause' && state.pauseCp) {
     switch (state.pauseCp.kind) {
       case 'rest':

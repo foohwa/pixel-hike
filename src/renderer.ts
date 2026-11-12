@@ -17,6 +17,7 @@ import { buildSites, hasSite, type Sites } from './sites3d';
 import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 import { effortAt } from './effort';
+import { photoCaption, scheduleBubbles, type Bubble, type PhotoArt } from './moments';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
@@ -44,6 +45,9 @@ export interface SceneData {
   env: EnvOptions;
   /** Rivers / lakes from OpenStreetMap, once loaded (null = none / not yet). */
   water: WaterData | null;
+  /** Your photos (pixel-art versions) and speech bubbles. */
+  photos: PhotoArt[];
+  bubbles: Bubble[];
 }
 
 /** Optional scenery extras (each can be switched off in the sidebar). */
@@ -109,6 +113,7 @@ export class PixelRenderer {
   private viewT = -1;
   private sunEvents: SunEvent[] = [];
   private toasts: { text: string; t: number }[] = [];
+  private bubbleTimes: { text: string; t: number }[] = [];
   /** Compass direction of the best outlook at each viewpoint checkpoint (cached per checkpoint). */
   private viewDir = new Map<string, number>();
   /** Map sprites seen last frame → video time each came into view (for fading in), and that frame's time. */
@@ -271,6 +276,7 @@ export class PixelRenderer {
     this.data = data;
     this.syncWater(data);
     this.syncSites(data);
+    this.bubbleTimes = scheduleBubbles(data.bubbles, (d) => data.timeline.videoTimeAtDistance(d), data.timeline.gateIn + data.timeline.intro);
     this.toasts = [];
     for (const ev of this.sunEvents) {
       const t = data.timeline.videoTimeAtClock(ev.ms);
@@ -732,6 +738,8 @@ export class PixelRenderer {
       env: this.data.env,
       effort,
       heroT,
+      bubbles: this.bubbleTimes,
+      photo: this.photoNow(st),
     });
     this.overlayTex.needsUpdate = true;
 
@@ -759,6 +767,13 @@ export class PixelRenderer {
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);
+  }
+
+  /** The polaroid to show while stopped for a photo. */
+  private photoNow(st: TimelineState) {
+    if (!st.photo) return null;
+    const p = this.data!.photos.find((x) => x.id === st.photo!.id);
+    return p ? { art: p, caption: photoCaption(this.data!.track, p, this.data!.tzOffsetMin), u: st.photo.u } : null;
   }
 
   private project(x: number, y: number, z: number): ScreenPoint {

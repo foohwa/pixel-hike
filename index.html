@@ -203,6 +203,23 @@
         </div>
 
         <div class="field">
+          <span>Photos &amp; speech bubbles</span>
+          <div class="row small">
+            <label class="link" title="JPEGs from your phone find their own spot on the trail (GPS or time taken). The walker stops, a flash, and the photo drops in as a pixel polaroid.">Add photos&hellip;<input type="file" id="photoFile" accept="image/*" multiple hidden /></label>
+            <select id="photoColors" title="Colours of the pixel polaroids">
+              <option value="palette">Game palette</option>
+              <option value="full">Photo colours</option>
+            </select>
+          </div>
+          <ul id="photos" class="cps moments"></ul>
+          <div class="row">
+            <input id="bubbleText" type="text" maxlength="60" placeholder="Say something, e.g. LEECHES!!" />
+            <button id="addBubble" class="mini" disabled title="The character says this where the scrubber is">+ Bubble here</button>
+          </div>
+          <ul id="bubbles" class="cps moments"></ul>
+        </div>
+
+        <div class="field">
           <span>Export</span>
           <div class="row">
             <select id="quality">

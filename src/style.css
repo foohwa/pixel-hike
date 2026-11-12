@@ -161,3 +161,11 @@ details.fold:not([open]) { display: block; }
 .lrow em { font-style: normal; color: var(--yellow); }
 .lrow select { padding: 3px 4px; font-size: 11px; }
 .lrow select:only-of-type { grid-column: 2 / 4; }
+
+.moments:empty { display: none; }
+.moments li { grid-template-columns: 16px 36px 1fr 22px 18px; }
+.moments li.bubble { grid-template-columns: 1fr 22px 18px; }
+.moments li.bubble .meta { grid-column: 1 / 4; margin-top: -3px; }
+.moments .meta { grid-column: 2 / 6; }
+.moments canvas { width: 36px; height: 27px; image-rendering: pixelated; border: 1px solid #000; background: var(--ink); object-fit: contain; }
+.moments .here-btn { padding: 0; width: 22px; height: 18px; box-shadow: none; font-size: 11px; }

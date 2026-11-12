@@ -20,6 +20,7 @@ import {
   ACTIVITY_LABEL, buildTrack, detectCheckpoints, guessActivity, KIND_LABEL, sampleAt, toLatLon,
   type Activity, type Checkpoint, type CheckpointKind, type Track,
 } from './track';
+import { newId, PHOTO_SECONDS, pixelatePhoto, placePhoto, readPhoto, speakable, type Bubble, type Photo, type PhotoColors } from './moments';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -85,6 +86,12 @@ const ui = {
   resetCps: $<HTMLButtonElement>('resetCps'),
   backupCps: $<HTMLButtonElement>('backupCps'),
   restoreCps: $<HTMLInputElement>('restoreCps'),
+  photoFile: $<HTMLInputElement>('photoFile'),
+  photoColors: $<HTMLSelectElement>('photoColors'),
+  photos: $('photos'),
+  bubbleText: $<HTMLInputElement>('bubbleText'),
+  addBubble: $<HTMLButtonElement>('addBubble'),
+  bubbles: $('bubbles'),
   quality: $<HTMLSelectElement>('quality'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
@@ -122,6 +129,10 @@ const state = {
   logoSource: null as LogoSource | null,
   logoSet: null as LogoSet | null,
   zones: null as TrailZones | null,
+  photos: [] as Photo[],
+  /** Pixel-art versions of the photos, by id (rebuilt when the colour choice changes). */
+  photoArt: new Map<string, HTMLCanvasElement>(),
+  bubbles: [] as Bubble[],
   soundtrack: null as AudioBuffer | null,
   soundtrackKey: '',
   t: 0,
@@ -173,6 +184,9 @@ async function loadParsed(parsed: ParsedTrack) {
   state.dem = dem;
   state.checkpoints = [];
   state.tombstones = [];
+  state.photos = [];
+  state.photoArt = new Map();
+  state.bubbles = [];
   fillTimezones(track.stats.startTime);
 
   // defaults for this track…
@@ -192,6 +206,8 @@ async function loadParsed(parsed: ParsedTrack) {
     if (typeof saved.settings.activity === 'string') activity = saved.settings.activity as Activity;
     pins = saved.pins.map((p) => ({ ...p, pinned: true }));
     state.tombstones = saved.tombstones ?? [];
+    state.photos = saved.photos ?? [];
+    state.bubbles = saved.bubbles ?? [];
   }
   state.checkpoints = pins; // so setActivity merges them in
   setActivity(activity, false);
@@ -200,7 +216,9 @@ async function loadParsed(parsed: ParsedTrack) {
   rebuild();
   state.t = 0;
   state.playing = true;
-  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps].forEach((el) => (el.disabled = false));
+  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble].forEach((el) => (el.disabled = false));
+  renderMoments();
+  void refreshPhotoArt();
   ui.play.innerHTML = '&#9208;';
   justRestored = !!saved;
   restoredAt = saved ? performance.now() : -Infinity;
@@ -277,7 +295,7 @@ function rebuild() {
   ui.zoneRows.classList.toggle('off', !ui.zonesOn.checked);
   ui.zoneState.textContent = ui.zonesOn.checked ? 'on' : 'off';
   renderZoneSummary();
-  state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate });
+  state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate, photos: photoStops() });
   renderer.setData({
     track: state.track,
     terrain: state.terrain,
@@ -294,6 +312,8 @@ function rebuild() {
     gate,
     zones: state.zones,
     water: state.water,
+    photos: shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, caption: p.caption, art: state.photoArt.get(p.id)! })),
+    bubbles: state.bubbles,
     env: {
       scenery,
       clouds: ui.envClouds.checked,
@@ -539,6 +559,7 @@ function collectSettings() {
     zoneAt2: zoneSettings().bands[2].at,
     zoneTech: ui.zoneTech.checked,
     zoneLabels: ui.zoneLabels.checked,
+    photoColors: ui.photoColors.value,
   };
 }
 
@@ -577,6 +598,7 @@ function applySettings(s: Record<string, unknown>) {
   });
   if (typeof s.zoneAt1 === 'number') ui.zoneAt1.value = String(s.zoneAt1);
   if (typeof s.zoneAt2 === 'number') ui.zoneAt2.value = String(s.zoneAt2);
+  if (s.photoColors === 'palette' || s.photoColors === 'full') ui.photoColors.value = s.photoColors;
   if ('logo' in s) {
     const url = typeof s.logo === 'string' ? s.logo : null;
     if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
@@ -600,6 +622,184 @@ async function setLogo(src: LogoSource | null) {
   }
   rebuild();
 }
+
+// ------------------------------------------------------------------ photos + speech bubbles
+
+const shownPhotos = () => state.photos.filter((p) => p.enabled && state.photoArt.has(p.id));
+const photoStops = () => shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, seconds: PHOTO_SECONDS }));
+
+/** (Re)makes the pixel-art polaroid pictures, then redraws. */
+let artJob = 0;
+async function refreshPhotoArt() {
+  const job = ++artJob;
+  const colors = ui.photoColors.value as PhotoColors;
+  const portrait = renderer.aspect === 'portrait';
+  const next = new Map<string, HTMLCanvasElement>();
+  for (const p of state.photos) {
+    try {
+      next.set(p.id, await pixelatePhoto(p.src, colors, portrait ? 116 : 84, portrait ? 110 : 64));
+    } catch (e) {
+      console.warn('Photo unreadable', e);
+    }
+    if (job !== artJob) return;
+  }
+  state.photoArt = next;
+  renderMoments();
+  rebuild();
+}
+
+/** Scrubber position as a track distance (null before the start / after the finish). */
+function scrubD(): number | null {
+  if (!state.track || !state.timeline) return null;
+  const d = state.timeline.sample(state.t).d;
+  return d > 0 && d < state.track.stats.distance ? d : null;
+}
+
+function fmtKm(d: number) {
+  return `km ${((d * (state.track?.distScale ?? 1)) / 1000).toFixed(1)}`;
+}
+
+const HOW: Record<Photo['how'], string> = { gps: 'placed by GPS', time: 'placed by time taken', file: 'placed by file date', manual: 'placed by hand' };
+
+function renderMoments() {
+  ui.photos.innerHTML = '';
+  for (const p of [...state.photos].sort((a, b) => a.d - b.d)) {
+    const li = document.createElement('li');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = p.enabled;
+    cb.title = 'Show this photo';
+    cb.onchange = () => { p.enabled = cb.checked; rebuild(); };
+    const thumb = document.createElement('canvas');
+    const art = state.photoArt.get(p.id);
+    if (art) {
+      thumb.width = art.width; thumb.height = art.height;
+      thumb.getContext('2d')!.drawImage(art, 0, 0);
+    }
+    const cap = document.createElement('input');
+    cap.type = 'text';
+    cap.maxLength = 22;
+    cap.placeholder = 'caption (time + km)';
+    cap.value = p.caption;
+    cap.oninput = () => { p.caption = cap.value; rebuild(); };
+    const move = document.createElement('button');
+    move.className = 'here-btn';
+    move.textContent = '⌖';
+    move.title = 'Move this photo to where the scrubber is';
+    move.onclick = () => {
+      const d = scrubD();
+      if (d == null) return flash('Scrub to a point along the trail first.');
+      p.d = d; p.how = 'manual';
+      p.time = state.track ? sampleAt(state.track, state.track.time, d) : null;
+      renderMoments();
+      rebuild();
+    };
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '✕';
+    del.title = 'Remove photo';
+    del.onclick = () => { state.photos = state.photos.filter((x) => x !== p); renderMoments(); rebuild(); };
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.title = 'Jump to this photo';
+    const when = p.time != null ? ` · ${clockText(p.time, Number(ui.tz.value || 0))}` : '';
+    meta.textContent = `${fmtKm(p.d)}${when} · ${HOW[p.how]}`;
+    meta.onclick = () => {
+      const t = state.timeline?.photoTimes.get(p.id);
+      if (t != null) seek(Math.max(0, t - 0.5));
+    };
+    li.append(cb, thumb, cap, move, del, meta);
+    ui.photos.append(li);
+  }
+
+  ui.bubbles.innerHTML = '';
+  for (const b of [...state.bubbles].sort((a, c) => a.d - c.d)) {
+    const li = document.createElement('li');
+    li.className = 'bubble';
+    const txt = document.createElement('input');
+    txt.type = 'text';
+    txt.maxLength = 60;
+    txt.value = b.text;
+    txt.oninput = () => { b.text = txt.value; rebuild(); };
+    const move = document.createElement('button');
+    move.className = 'here-btn';
+    move.textContent = '⌖';
+    move.title = 'Move this bubble to where the scrubber is';
+    move.onclick = () => {
+      const d = scrubD();
+      if (d == null) return flash('Scrub to a point along the trail first.');
+      b.d = d;
+      renderMoments();
+      rebuild();
+    };
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '✕';
+    del.title = 'Remove bubble';
+    del.onclick = () => { state.bubbles = state.bubbles.filter((x) => x !== b); renderMoments(); rebuild(); };
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.title = 'Jump to this bubble';
+    meta.textContent = `💬 ${fmtKm(b.d)}`;
+    meta.onclick = () => {
+      const t = state.timeline?.videoTimeAtDistance(b.d);
+      if (t != null) seek(Math.max(0, t - 0.3));
+    };
+    li.append(txt, move, del, meta);
+    ui.bubbles.append(li);
+  }
+}
+
+function flash(msg: string) {
+  setStatus(msg);
+  setTimeout(() => { if (ui.status.textContent === msg) setStatus(''); }, 2200);
+}
+
+ui.photoFile.onchange = async () => {
+  const files = [...(ui.photoFile.files ?? [])];
+  ui.photoFile.value = '';
+  if (!files.length || !state.track) return;
+  const track = state.track;
+  const fallback = scrubD() ?? track.stats.distance / 2;
+  let placed = 0, failed = 0;
+  for (const [i, f] of files.entries()) {
+    setStatus(`Reading photos… ${i + 1}/${files.length}`);
+    try {
+      const r = await readPhoto(f);
+      if (state.track !== track) return;
+      const at = placePhoto(track, r, Number(ui.tz.value || 0), fallback);
+      state.photos.push({ id: newId('photo'), d: at.d, time: at.time, src: r.src, caption: '', how: at.how, enabled: true });
+      if (at.how !== 'manual') placed++;
+    } catch (e) {
+      console.warn(e);
+      failed++;
+    }
+  }
+  setStatus('');
+  const manual = files.length - failed - placed;
+  flash(
+    [`Added ${files.length - failed} photo${files.length - failed === 1 ? '' : 's'}`,
+      manual ? `${manual} without a time or place went to the scrubber's spot (use ⌖ to move)` : '',
+      failed ? `${failed} couldn't be read` : ''].filter(Boolean).join(' · '),
+  );
+  await refreshPhotoArt();
+};
+ui.photoColors.onchange = () => void refreshPhotoArt();
+
+ui.addBubble.onclick = () => {
+  const d = scrubD();
+  if (d == null) return flash('Scrub to a point along the trail first.');
+  const text = ui.bubbleText.value.trim();
+  if (!speakable(text)) { ui.bubbleText.focus(); return flash('Type what the character says first.'); }
+  state.bubbles.push({ id: newId('bubble'), d, text });
+  ui.bubbleText.value = '';
+  renderMoments();
+  rebuild();
+  // play it from just before, so you see it straight away
+  const t = state.timeline?.videoTimeAtDistance(d);
+  if (t != null) seek(Math.max(0, t - 0.3));
+};
+ui.bubbleText.onkeydown = (e) => { if (e.key === 'Enter') ui.addBubble.click(); };
 
 // ------------------------------------------------------------------ music
 
@@ -878,7 +1078,7 @@ function seek(t: number) {
 }
 
 bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); persist(); });
-bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); persist(); });
+bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
 bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
@@ -1022,6 +1222,8 @@ function currentSaveState() {
     settings: collectSettings(),
     pins: state.checkpoints.filter((c) => c.pinned),
     tombstones: state.tombstones,
+    photos: state.photos,
+    bubbles: state.bubbles,
   };
 }
 
@@ -1048,6 +1250,10 @@ ui.restoreCps.onchange = async () => {
     applySettings(b.settings);
     state.tombstones = b.tombstones ?? [];
     state.checkpoints = b.pins.map((p) => ({ ...p, pinned: true }));
+    state.photos = b.photos ?? [];
+    state.bubbles = b.bubbles ?? [];
+    renderMoments();
+    void refreshPhotoArt();
     setActivity((b.settings.activity as Activity) ?? state.activity, false);
     state.restoring = false;
     justRestored = true;
