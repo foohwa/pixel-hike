@@ -591,7 +591,11 @@ export class PixelRenderer {
     const cpScreen = new Map<string, ScreenPoint>();
     for (const cp of checkpoints) {
       const x = sampleAt(track, track.x, cp.d), z = sampleAt(track, track.z, cp.d);
-      cpScreen.set(cp.id, this.project(x, terrain.worldY(x, z), z));
+      const y = terrain.worldY(x, z);
+      const p = this.project(x, y, z);
+      // flags/tents/signs behind a ridge stay hidden (the 2D map looks straight down: nothing hides)
+      if (!is2d && p.visible && this.cpBehindRidge(cp.id, x, y, z)) p.visible = false;
+      cpScreen.set(cp.id, p);
     }
 
     const decor = this.decorFrame(st, hiker);
@@ -737,6 +741,34 @@ export class PixelRenderer {
     if (h >= -2 && h <= 2) return 0.95;
     if (h > 2 && h < 4) return 0.95 - (h - 2) * 0.45;
     return night > 0.5 ? 0.35 : 0;
+  }
+
+  /**
+   * How far the terrain rises above the camera→point sight line (world units; > 0 = blocked).
+   * Steps every ~1.5 grid cells so a thin ridge between a far checkpoint and the camera isn't skipped.
+   */
+  private ridgeAbove(x: number, y: number, z: number, lift: number) {
+    const c = this.camera.position, t = this.data!.terrain;
+    const ty = y + lift;
+    const n = Math.min(160, Math.max(12, Math.ceil(Math.hypot(x - c.x, z - c.z) / (t.spacing * 1.5))));
+    let worst = -Infinity;
+    for (let s = 1; s < n; s++) {
+      const f = s / n;
+      worst = Math.max(worst, t.worldY(c.x + (x - c.x) * f, c.z + (z - c.z) * f) - (c.y + (ty - c.y) * f));
+    }
+    return worst;
+  }
+
+  /** Per checkpoint, with a little hysteresis so a flag right on a skyline doesn't flicker. */
+  private cpHidden = new Map<string, boolean>();
+  private cpBehindRidge(id: string, x: number, y: number, z: number) {
+    const s = this.data!.terrain.spacing;
+    // sight line to just above the ground (the bottom of the flag pole)
+    const h = this.ridgeAbove(x, y, z, s * 0.2);
+    const was = this.cpHidden.get(id) ?? false;
+    const now = h > s * 0.08 ? true : h < -s * 0.08 ? false : was;
+    this.cpHidden.set(id, now);
+    return now;
   }
 
   /** True when a ridge sits between the camera and the point (cheap ray march over the height field). */
