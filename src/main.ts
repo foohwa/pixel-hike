@@ -1571,7 +1571,7 @@ async function openFiles(files: File[]) {
 }
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('No offline mode', e));
+  navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((e) => console.warn('No offline mode', e));
 }
 
 // touch screens: there's nothing to drop onto, you tap
@@ -1588,7 +1588,7 @@ if (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'Mac
 /** Files shared to the installed app (Android share sheet): the service worker parked them in a cache. */
 async function takeShared() {
   if (!new URLSearchParams(location.search).has('shared') || !('caches' in window)) return;
-  history.replaceState(null, '', '/');
+  history.replaceState(null, '', import.meta.env.BASE_URL);
   const cache = await caches.open('pixelhike-shared');
   const files: File[] = [];
   for (const req of await cache.keys()) {

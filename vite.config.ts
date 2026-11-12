@@ -68,4 +68,5 @@ function dropPrivateSamples(): Plugin {
   };
 }
 
-export default defineConfig({ plugins: [editsOnDisk(), dropPrivateSamples()] });
+// GitHub Pages serves the app from /<repo>/; the deploy workflow sets BASE_PATH. Locally it stays '/'.
+export default defineConfig({ base: process.env.BASE_PATH ?? '/', plugins: [editsOnDisk(), dropPrivateSamples()] });

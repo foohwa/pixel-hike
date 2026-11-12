@@ -41,7 +41,7 @@ function preferredExt() {
 export function loadTrack(id: string): Promise<AudioBuffer> {
   let p = decoded.get(id);
   if (!p) {
-    p = fetch(`/music/${id}.${preferredExt()}`)
+    p = fetch(`${import.meta.env.BASE_URL}music/${id}.${preferredExt()}`)
       .then((r) => {
         if (!r.ok) throw new Error(`Music ${id} not found`);
         return r.arrayBuffer();

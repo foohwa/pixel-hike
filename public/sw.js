@@ -3,21 +3,23 @@
 // nothing is sent anywhere.
 const APP = 'pixelhike-app-v1';
 const SHARED = 'pixelhike-shared';
+// '/' locally, '/pixel-hike/' on GitHub Pages
+const BASE = new URL(self.registration.scope).pathname;
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method === 'POST' && url.origin === location.origin && url.pathname === '/share-target') {
+  if (e.request.method === 'POST' && url.origin === location.origin && url.pathname === BASE + 'share-target') {
     e.respondWith(receiveShare(e.request));
     return;
   }
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // map tiles, weather: straight to the network
   if (e.request.mode === 'navigate') {
     // the page: fresh when online, the saved copy when not
-    e.respondWith(fetch(e.request).then((r) => { const c = r.clone(); caches.open(APP).then((k) => k.put('/', c)); return r; })
-      .catch(() => caches.match('/')));
+    e.respondWith(fetch(e.request).then((r) => { const c = r.clone(); caches.open(APP).then((k) => k.put(BASE, c)); return r; })
+      .catch(() => caches.match(BASE)));
     return;
   }
   // scripts, styles, icons, music: from the cache, refreshed in the background
@@ -35,7 +37,7 @@ async function receiveShare(req) {
   for (const k of await cache.keys()) await cache.delete(k);
   let i = 0;
   for (const f of files) {
-    await cache.put(`/shared/${i++}`, new Response(f, { headers: { 'content-type': f.type || 'application/octet-stream', 'x-name': encodeURIComponent(f.name) } }));
+    await cache.put(`${BASE}shared/${i++}`, new Response(f, { headers: { 'content-type': f.type || 'application/octet-stream', 'x-name': encodeURIComponent(f.name) } }));
   }
-  return Response.redirect('/?shared', 303);
+  return Response.redirect(BASE + '?shared', 303);
 }
