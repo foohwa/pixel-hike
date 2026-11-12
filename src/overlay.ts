@@ -11,6 +11,7 @@ import { DECOR_KEYS, WARN_SIGN, ZONE_COLOR, type TrailZones } from './zones';
 import type { EnvOptions } from './renderer';
 import { drawEffortFx, tintFrame, type EffortFx } from './effort';
 import { drawBubble, drawPolaroid, type PhotoArt } from './moments';
+import { drawWeather, RAIN_ICON, STORM_ICON, type WeatherNow } from './weather';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
 
@@ -95,6 +96,11 @@ export interface OverlayInput {
   bubbles: { text: string; t: number }[];
   /** Stopped for one of your photos: the polaroid, its caption and how far through (0..1). */
   photo: { art: PhotoArt; caption: string; u: number } | null;
+  weather: WeatherNow;
+  /** The weather model's ground height (m), to adjust its temperature to the trail's, or null. */
+  weatherElevation: number | null;
+  /** Roughly where the sky ends on screen (for rain splashes / lightning). */
+  skyH: number;
 }
 
 export interface EventLogo {
@@ -133,6 +139,7 @@ export function drawOverlay(o: OverlayInput) {
 
   drawWorldSprites(o);
   drawBirds(o);
+  if (o.state.phase !== 'intro' || o.state.introT > o.timeline.intro - 1.2) drawWeather(ctx, o.weather, o.state.t, W, H, o.sky.lamp > 0.5, o.skyH);
   drawHud(o);
   drawNext(o);
   drawBadge(o);
@@ -651,6 +658,12 @@ function drawHud(o: OverlayInput) {
     right.push([HEART, String(Math.round(hr)), zone === 'max' ? C.red : zone === 'hard' ? C.yellow : big ? C.pink : C.white]);
   }
   if (Number.isFinite(temp)) right.push([THERMO, `${Math.round(temp)}°C`, C.white]);
+  else if (o.weather.temp != null) {
+    // no thermometer on the watch: the weather model's air temperature, adjusted to the trail's height
+    right.push([THERMO, `${Math.round(o.weather.temp - (ele - (o.weatherElevation ?? ele)) * 0.0065)}°C`, C.white]);
+  }
+  if (o.weather.thunder) right.push([STORM_ICON, 'STORM', C.yellow]);
+  else if (o.weather.rain > 0) right.push([RAIN_ICON, o.weather.rain > 0.6 ? 'HEAVY' : o.weather.rain > 0.3 ? 'RAIN' : 'DRIZZLE', C.skyLight]);
   const rw = Math.max(...right.map(([, s]) => textWidth(s))) + 20;
   const rh = 4 + right.length * 9;
   panel(ctx, W - 4 - rw, 4, rw, rh);

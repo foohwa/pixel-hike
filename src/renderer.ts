@@ -18,6 +18,7 @@ import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 import { effortAt } from './effort';
 import { photoCaption, scheduleBubbles, type Bubble, type PhotoArt } from './moments';
+import { weatherAt, weatherEvents, type WeatherMode, type WeatherNow, type WeatherSeries } from './weather';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
@@ -48,6 +49,8 @@ export interface SceneData {
   /** Your photos (pixel-art versions) and speech bubbles. */
   photos: PhotoArt[];
   bubbles: Bubble[];
+  /** Hourly weather for the day (Open-Meteo) and how to use it. */
+  weather: { series: WeatherSeries | null; mode: WeatherMode };
 }
 
 /** Optional scenery extras (each can be switched off in the sidebar). */
@@ -204,7 +207,7 @@ export class PixelRenderer {
               vec2 cp = vec2((px.x + uYawPx) / 52.0 + uTime * 0.05, px.y / 9.0);
               float cn = vn(cp) * 0.65 + vn(cp * 2.1 + 4.3) * 0.35;
               float band = smoothstep(0.42, 0.6, vUv.y) * (1.0 - smoothstep(0.82, 0.97, vUv.y));
-              float v = cn * band;
+              float v = cn * band + max(0.0, uSkyCloud - 1.0) * 0.38 * band; // > 1: overcast
               if (v > 0.5) col = uCloudCol;
               else if (v > 0.44) col = mix(col, uCloudCol, 0.55);
             }
@@ -294,6 +297,10 @@ export class PixelRenderer {
     }
     const t0 = data.timeline.gateIn + data.timeline.intro;
     const soft = new Set<{ text: string; t: number }>();
+    for (const ev of weatherEvents(data.weather.series, data.weather.mode, data.track.stats.startTime, data.track.stats.endTime)) {
+      const t = data.timeline.videoTimeAtClock(ev.ms);
+      if (t != null && t >= t0) this.toasts.push({ text: ev.text, t });
+    }
     if (data.env.water && this.water) {
       for (const c of this.water.scene.crossings) {
         const t = data.timeline.videoTimeAtDistance(c.d);
@@ -572,10 +579,13 @@ export class PixelRenderer {
 
     // ---- sky / light
     const ms = st.clockMs;
-    const sky = skyAt(ms, track.lat0, track.lon0);
+    const weather = st.phase === 'gateStart' || st.phase === 'gateFinish' ? NO_WEATHER : weatherAt(this.data.weather.series, this.data.weather.mode, ms);
+    const overcast = clamp(weather.cloud * 0.75 + weather.rain * 0.5, 0, 1);
+    const sky = withWeather(skyAt(ms, track.lat0, track.lon0), overcast);
     const sp = sunPosition(ms, track.lat0, track.lon0);
     const mp = moonPosition(ms, track.lat0, track.lon0);
     this.applyLight(sky, sp, mp, ms);
+    shared.uShadow.value *= 1 - overcast * 0.85; // no crisp sun shadows under a grey sky
     shared.uFogCol.value.setRGB(...sky.bottom);
     const fogNear = is2d ? 1e9 : r.camDist * 2.6;
     const fogFar = is2d ? 2e9 : r.camDist * 10;
@@ -594,7 +604,9 @@ export class PixelRenderer {
     shared.uBeam.value = env.life ? 1 : 0;
     shared.uLampDir.value.set(sampleAt(track, track.hdx, st.d), sampleAt(track, track.hdz, st.d)).normalize();
     if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
-    terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' ? this.mistAt(ms) * (is2d ? 0.6 : 1) : 0;
+    terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart'
+      ? Math.max(this.mistAt(ms), overcast * 0.45 + weather.rain * 0.35) * (is2d ? 0.6 : 1)
+      : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
     if (this.sites) {
       this.sites.sites.group.visible = !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
@@ -738,6 +750,9 @@ export class PixelRenderer {
       env: this.data.env,
       effort,
       heroT,
+      weather,
+      weatherElevation: this.data.weather.series?.elevation ?? null,
+      skyH: is2d ? 0 : Math.round(this.H * 0.38),
       bubbles: this.bubbleTimes,
       photo: this.photoNow(st),
     });
@@ -753,13 +768,14 @@ export class PixelRenderer {
     this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
     if (pu.uSun.value.z > 0.5) pu.uMoon.value.z = 0; // keep it simple: one disc at a time
     pu.uMoonPhase.value = moonPhase(ms);
-    pu.uSkyCloud.value = env.clouds ? 1 : 0;
+    pu.uSkyCloud.value = env.clouds || overcast > 0.3 ? 1 + overcast : 0;
     const night = clamp(sky.lamp, 0, 1);
     const cb = sky.bottom;
+    const wet = 1 - weather.rain * 0.3; // rain clouds are darker
     pu.uCloudCol.value.set(
-      (cb[0] + (1 - cb[0]) * 0.65) * (1 - night * 0.55),
-      (cb[1] + (1 - cb[1]) * 0.65) * (1 - night * 0.55),
-      (cb[2] + (1 - cb[2]) * 0.65) * (1 - night * 0.45),
+      (cb[0] + (1 - cb[0]) * 0.65) * (1 - night * 0.55) * wet,
+      (cb[1] + (1 - cb[1]) * 0.65) * (1 - night * 0.55) * wet,
+      (cb[2] + (1 - cb[2]) * 0.65) * (1 - night * 0.45) * wet,
     );
     const dir = this.camera.getWorldDirection(this.tmp2);
     const hfov = 2 * Math.atan(Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect);
@@ -1156,6 +1172,24 @@ function pathPoint(p: { pts: Float32Array; cum: Float32Array }, s: number): [num
   const f = c[hi] > c[lo] ? (s - c[lo]) / (c[hi] - c[lo]) : 0;
   const a = lo * 3, b = hi * 3, P = p.pts;
   return [P[a] + (P[b] - P[a]) * f, P[a + 1] + (P[b + 1] - P[a + 1]) * f, P[a + 2] + (P[b + 2] - P[a + 2]) * f];
+}
+
+const NO_WEATHER: WeatherNow = { rain: 0, cloud: 0, thunder: false, temp: null };
+
+/** The sky under cloud: colours greyed towards an overcast sky, the sun dimmed. */
+function withWeather(sky: ReturnType<typeof skyAt>, overcast: number): ReturnType<typeof skyAt> {
+  if (overcast <= 0.02) return sky;
+  const k = overcast * 0.65;
+  const night = clamp(sky.lamp, 0, 1);
+  const greyTop = rgb01(night > 0.5 ? C.ink2 : C.rockDark), greyBot = rgb01(night > 0.5 ? C.night : C.greyLight);
+  const mix = (a: number[], b: number[]) => a.map((v, i) => v + (b[i] - v) * k) as [number, number, number];
+  return {
+    ...sky,
+    top: mix(sky.top, greyTop),
+    bottom: mix(sky.bottom, greyBot),
+    sunColor: sky.sunColor.map((v) => v * (1 - 0.4 * overcast)) as [number, number, number],
+    ambient: sky.ambient.map((v) => v * (1 - 0.1 * overcast)) as [number, number, number],
+  };
 }
 
 function ease(x: number) {

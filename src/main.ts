@@ -21,6 +21,7 @@ import {
   type Activity, type Checkpoint, type CheckpointKind, type Track,
 } from './track';
 import { newId, PHOTO_SECONDS, pixelatePhoto, placePhoto, readPhoto, speakable, type Bubble, type Photo, type PhotoColors } from './moments';
+import { loadWeather, weatherSummary, type WeatherMode, type WeatherSeries } from './weather';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -50,6 +51,8 @@ const ui = {
   envWater: $<HTMLInputElement>('envWater'),
   envLandmarks: $<HTMLInputElement>('envLandmarks'),
   envEffort: $<HTMLInputElement>('envEffort'),
+  weather: $<HTMLSelectElement>('weather'),
+  weatherInfo: $('weatherInfo'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
   zoneRows: $('zoneRows'),
   zoneStyle: [0, 1, 2].map((i) => $<HTMLSelectElement>(`zoneStyle${i}`)),
@@ -133,6 +136,8 @@ const state = {
   /** Pixel-art versions of the photos, by id (rebuilt when the colour choice changes). */
   photoArt: new Map<string, HTMLCanvasElement>(),
   bubbles: [] as Bubble[],
+  weather: null as WeatherSeries | null,
+  weatherLoad: null as Promise<void> | null,
   soundtrack: null as AudioBuffer | null,
   soundtrackKey: '',
   t: 0,
@@ -187,6 +192,9 @@ async function loadParsed(parsed: ParsedTrack) {
   state.photos = [];
   state.photoArt = new Map();
   state.bubbles = [];
+  state.weather = null;
+  state.weatherLoad = null;
+  ui.weatherInfo.textContent = '';
   fillTimezones(track.stats.startTime);
 
   // defaults for this track…
@@ -226,6 +234,32 @@ async function loadParsed(parsed: ParsedTrack) {
   if (!dem) setTimeout(() => setStatus(''), 3000);
   void updateSoundtrack().then(syncAudio);
   void ensureWater();
+  void ensureWeather();
+}
+
+/** Fetch the day's weather once (if real weather is chosen). */
+function ensureWeather(): Promise<void> {
+  const track = state.track;
+  if (!track || ui.weather.value !== 'real' || !track.hasTime) {
+    ui.weatherInfo.textContent = ui.weather.value === 'real' && track && !track.hasTime ? 'needs a track with times' : '';
+    return Promise.resolve();
+  }
+  if (state.weather) return Promise.resolve();
+  if (state.weatherLoad) return state.weatherLoad;
+  ui.weatherInfo.textContent = 'loading…';
+  state.weatherLoad = loadWeather(track.lat0, track.lon0, track.stats.startTime, track.stats.endTime)
+    .then((w) => {
+      if (state.track !== track) return;
+      state.weather = w;
+      ui.weatherInfo.textContent = weatherSummary(w, track.stats.startTime, track.stats.endTime, Number(ui.tz.value || 0));
+      rebuild();
+    })
+    .catch((e) => {
+      console.warn('Weather unavailable', e);
+      state.weatherLoad = null;
+      if (state.track === track) ui.weatherInfo.textContent = 'weather unavailable right now';
+    });
+  return state.weatherLoad;
 }
 
 function heroSet(): SpriteSet {
@@ -312,6 +346,7 @@ function rebuild() {
     gate,
     zones: state.zones,
     water: state.water,
+    weather: { series: state.weather, mode: ui.weather.value as WeatherMode },
     photos: shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, caption: p.caption, art: state.photoArt.get(p.id)! })),
     bubbles: state.bubbles,
     env: {
@@ -560,6 +595,7 @@ function collectSettings() {
     zoneTech: ui.zoneTech.checked,
     zoneLabels: ui.zoneLabels.checked,
     photoColors: ui.photoColors.value,
+    weather: ui.weather.value,
   };
 }
 
@@ -599,6 +635,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.zoneAt1 === 'number') ui.zoneAt1.value = String(s.zoneAt1);
   if (typeof s.zoneAt2 === 'number') ui.zoneAt2.value = String(s.zoneAt2);
   if (s.photoColors === 'palette' || s.photoColors === 'full') ui.photoColors.value = s.photoColors;
+  if (typeof s.weather === 'string' && ['real', 'clear', 'drizzle', 'rain', 'storm'].includes(s.weather)) ui.weather.value = s.weather;
   if ('logo' in s) {
     const url = typeof s.logo === 'string' ? s.logo : null;
     if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
@@ -785,6 +822,7 @@ ui.photoFile.onchange = async () => {
   await refreshPhotoArt();
 };
 ui.photoColors.onchange = () => void refreshPhotoArt();
+ui.weather.onchange = () => { rebuild(); void ensureWeather(); };
 
 ui.addBubble.onclick = () => {
   const d = scrubD();
@@ -1405,6 +1443,8 @@ Object.assign(window, {
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
     },
+    weatherReady() { return ensureWeather().then(() => state.weather && { hours: state.weather.precip.length, summary: ui.weatherInfo.textContent }); },
+    setWeather(m: WeatherMode) { ui.weather.value = m; rebuild(); return ensureWeather(); },
     waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length, pois: state.water.pois.length, extras: !!state.water.extras, surface: state.surface }); },
     /** For scripts/bake-map.mjs: the loaded map data and the area key it's cached under. */
     mapData() { return ensureWater().then(() => state.bbox && state.water && { area: mapAreaKey(state.bbox), data: state.water }); },
