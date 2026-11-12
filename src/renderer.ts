@@ -5,7 +5,9 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
 import type { GateOptions } from './gate';
 import { openness } from './landmarks';
-import { clockText, drawOverlay, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
+import { frameOf } from './characters';
+import { SceneFigures } from './hero3d';
+import { clockText, drawOverlay, pickAnim, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Scenery, type Terrain } from './terrain';
@@ -83,6 +85,8 @@ export class PixelRenderer {
 
   private data: SceneData | null = null;
   private rig: Rig | null = null;
+  /** The walker + companion as figures in the 3D scene. */
+  private figures = new SceneFigures();
   private trail: { group: THREE.Group; done: Line2; step: number; mats: LineMaterial[] } | null = null;
   private water: { scene: WaterScene; data: WaterData; terrain: Terrain } | null = null;
   /** Checkpoint set pieces in 3D (aid stations…), rebuilt when the checkpoints or the diorama change. */
@@ -219,6 +223,7 @@ export class PixelRenderer {
     this.post = { scene: postScene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), mat };
 
     this.setAspect('landscape');
+    this.scene.add(this.figures.group);
   }
 
   setAspect(aspect: Aspect) {
@@ -602,13 +607,7 @@ export class PixelRenderer {
     const segs = Math.max(0, Math.floor(st.d / tr.step));
     (tr.done.geometry as LineGeometry).instanceCount = segs;
 
-    // ---- 3D pass
-    this.gl.setRenderTarget(this.rt);
-    this.gl.setClearColor(0x000000, 0);
-    this.gl.clear(true, true, true);
-    this.gl.render(this.scene, this.camera);
-
-    // ---- overlay pass
+    // ---- where the walker is on screen, which way it faces
     const hiker = this.project(hx, hy, hz);
     const ahead = Math.min(track.stats.distance, st.d + 40);
     const ax = sampleAt(track, track.x, ahead), az = sampleAt(track, track.z, ahead);
@@ -616,6 +615,35 @@ export class PixelRenderer {
     const dx = pa.x - hiker.x;
     if (dx < -0.4) this.facingLeft = true;
     else if (dx > 0.4) this.facingLeft = false;
+    const petAt = this.data.pet
+      ? { x: hiker.x + (this.facingLeft ? 11 : -11), y: hiker.y + 1, visible: hiker.visible }
+      : null;
+
+    // ---- in 3D the walker + companion stand in the scene (lit, shadowed, hidden by what's in front)
+    const inScene = !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
+    if (inScene && hiker.visible) {
+      const anim = pickAnim({ state: st, track, activity: this.data.activity, sky });
+      const feet = new THREE.Vector3(hx, hy, hz);
+      const useShadowDir = env.light && shared.uShadow.value > 0;
+      const light = (useShadowDir ? shared.uShadowDir.value : shared.uSunDir.value).clone().normalize();
+      const shadowK = useShadowDir ? shared.uShadow.value : sky.lamp < 0.5 ? 1 : 0;
+      this.figures.place(0, frameOf(this.data.hero, anim, st.t, this.facingLeft), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+      if (this.data.pet && petAt) {
+        // the companion's feet: its screen spot, at the walker's depth, dropped onto the ground
+        const ndcZ = feet.clone().project(this.camera).z;
+        const pf = new THREE.Vector3((petAt.x / this.W) * 2 - 1, 1 - (petAt.y / this.H) * 2, ndcZ).unproject(this.camera);
+        pf.y = terrain.worldY(pf.x, pf.z);
+        this.figures.place(1, frameOf(this.data.pet, anim, st.t + 0.13, this.facingLeft), pf, petAt.x, petAt.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+      } else this.figures.place(1, null, feet, 0, 0, this.camera, this.W, this.H, terrain, r.camDist, light, 0);
+    } else this.figures.hide();
+
+    // ---- 3D pass
+    this.gl.setRenderTarget(this.rt);
+    this.gl.setClearColor(0x000000, 0);
+    this.gl.clear(true, true, true);
+    this.gl.render(this.scene, this.camera);
+
+    // ---- overlay pass
 
     const cpScreen = new Map<string, ScreenPoint>();
     for (const cp of checkpoints) {
@@ -630,9 +658,6 @@ export class PixelRenderer {
     const decor = this.decorFrame(st, hiker);
     const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
-    const petAt = this.data.pet
-      ? { x: hiker.x + (this.facingLeft ? 11 : -11), y: hiker.y + 1, visible: hiker.visible }
-      : null;
     drawOverlay({
       ctx: this.overlayCtx,
       W: this.W,
@@ -660,6 +685,7 @@ export class PixelRenderer {
       zones: this.data.zones,
       decor,
       map,
+      heroInScene: inScene,
       sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,
     });

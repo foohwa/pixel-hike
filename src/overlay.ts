@@ -78,6 +78,8 @@ export interface OverlayInput {
   /** Props along the trail for this frame (see PixelRenderer.decorFrame), or null. */
   decor: DecorFrame | null;
   map: MapFrame | null;
+  /** The walker + companion are drawn in the 3D scene (hero3d.ts), not here. */
+  heroInScene: boolean;
   /** Checkpoints built into the 3D scene (sites3d.ts): no sprite for these. */
   sited: Set<string> | null;
   env: EnvOptions;
@@ -500,7 +502,7 @@ function drawWorldSprites(o: OverlayInput) {
   drawFireflies(o);
 
   // companion trots a little behind
-  if (o.pet && o.petAt?.visible) {
+  if (o.pet && o.petAt?.visible && !o.heroInScene) {
     const p = o.petAt;
     ctx.fillStyle = C.ink;
     ctx.fillRect(p.x - 4, p.y - 1, 9, 2);
@@ -509,9 +511,11 @@ function drawWorldSprites(o: OverlayInput) {
 
   const h = o.heroAt;
   if (!h.visible) return;
-  ctx.fillStyle = C.ink;
-  ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
-  ctx.drawImage(frameOf(o.hero, anim, t, o.facingLeft), h.x - 8, h.y - 16);
+  if (!o.heroInScene) {
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
+    ctx.drawImage(frameOf(o.hero, anim, t, o.facingLeft), h.x - 8, h.y - 16);
+  }
 
   // head-lamp sparkle at night
   if (o.hero.lamp && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
