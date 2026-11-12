@@ -82,7 +82,7 @@ export class PixelRenderer {
 
   private data: SceneData | null = null;
   private rig: Rig | null = null;
-  private trail: { group: THREE.Group; done: Line2; ghost: Line2; step: number; mats: LineMaterial[] } | null = null;
+  private trail: { group: THREE.Group; done: Line2; step: number; mats: LineMaterial[] } | null = null;
   private water: { scene: WaterScene; data: WaterData; terrain: Terrain } | null = null;
 
   mode: ViewMode = '3d';
@@ -389,15 +389,13 @@ export class PixelRenderer {
     };
     const ahead = new Line2(geo(), mk(C.greyLight, 1, true, true));
     ahead.computeLineDistances();
-    const ghost = new Line2(geo(), mk(C.wine, 1, false));
-    ghost.renderOrder = 10;
     const done = new Line2(geo(), mk(C.coral, 2, true));
     done.renderOrder = 11;
     const group = new THREE.Group();
-    group.add(ahead, ghost, done);
-    [ahead, ghost, done].forEach((l) => (l.frustumCulled = false));
+    group.add(ahead, done);
+    [ahead, done].forEach((l) => (l.frustumCulled = false));
     this.scene.add(group);
-    this.trail = { group, done, ghost, step, mats: [ahead.material, ghost.material, done.material] };
+    this.trail = { group, done, step, mats: [ahead.material, done.material] };
   }
 
   private buildRig() {
@@ -570,8 +568,6 @@ export class PixelRenderer {
     const tr = this.trail!;
     const segs = Math.max(0, Math.floor(st.d / tr.step));
     (tr.done.geometry as LineGeometry).instanceCount = segs;
-    (tr.ghost.geometry as LineGeometry).instanceCount = segs;
-    tr.ghost.visible = !is2d;
 
     // ---- 3D pass
     this.gl.setRenderTarget(this.rt);
@@ -747,10 +743,10 @@ export class PixelRenderer {
    * How far the terrain rises above the camera→point sight line (world units; > 0 = blocked).
    * Steps every ~1.5 grid cells so a thin ridge between a far checkpoint and the camera isn't skipped.
    */
-  private ridgeAbove(x: number, y: number, z: number, lift: number) {
+  private ridgeAbove(x: number, y: number, z: number, lift: number, maxSteps = 160) {
     const c = this.camera.position, t = this.data!.terrain;
     const ty = y + lift;
-    const n = Math.min(160, Math.max(12, Math.ceil(Math.hypot(x - c.x, z - c.z) / (t.spacing * 1.5))));
+    const n = Math.min(maxSteps, Math.max(12, Math.ceil(Math.hypot(x - c.x, z - c.z) / (t.spacing * 1.5))));
     let worst = -Infinity;
     for (let s = 1; s < n; s++) {
       const f = s / n;
@@ -771,16 +767,9 @@ export class PixelRenderer {
     return now;
   }
 
-  /** True when a ridge sits between the camera and the point (cheap ray march over the height field). */
+  /** True when a ridge sits between the camera and the point (ray march over the height field). */
   private occluded(x: number, y: number, z: number) {
-    const c = this.camera.position, t = this.data!.terrain;
-    const ty = y + t.spacing * 0.15;
-    for (let s = 1; s < 10; s++) {
-      const f = s / 10;
-      const px = c.x + (x - c.x) * f, pz = c.z + (z - c.z) * f;
-      if (t.worldY(px, pz) > c.y + (ty - c.y) * f) return true;
-    }
-    return false;
+    return this.ridgeAbove(x, y, z, this.data!.terrain.spacing * 0.15, 64) > 0;
   }
 
   /**
