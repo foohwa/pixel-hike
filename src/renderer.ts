@@ -821,7 +821,7 @@ export class PixelRenderer {
       if (!is2d && this.occluded(x, y, z)) return null;
       return { x: Math.round(p.x), y: Math.round(p.y), q: is2d ? 2.4 : q };
     };
-    const out: MapFrame = { lamps: [], rapids: [], bridges: [], vehicles: [], falls: [], camps: [], springs: [] };
+    const out: MapFrame = { lamps: [], rapids: [], bridges: [], vehicles: [], falls: [], sideFalls: [], camps: [], springs: [] };
 
     if (env.water) {
       if (night) {
@@ -875,6 +875,10 @@ export class PixelRenderer {
         if (p.kind === 'waterfall') {
           const v = vis(p.x, p.y, p.z, 3.5);
           if (v) out.falls.push(v);
+          if (p.d == null && p.near.off < 2500) {
+            const s = this.sideFall(p, vis);
+            if (s) out.sideFalls.push(s);
+          }
         } else if (p.d != null && (p.kind === 'camp' || p.kind === 'spring')) {
           const v = vis(p.x, p.y, p.z, p.kind === 'camp' ? 2.2 : 1.8);
           if (v) (p.kind === 'camp' ? out.camps : out.springs).push(v);
@@ -882,6 +886,36 @@ export class PixelRenderer {
       }
     }
     return out;
+  }
+
+  /**
+   * Where to show an off-route waterfall beside the trail: at the route point closest to it, pushed
+   * sideways (on screen) to the side it really lies on, with an arrow sign at the trail edge.
+   */
+  private sideFall(
+    p: { x: number; z: number; near: { d: number } },
+    vis: (x: number, y: number, z: number, maxQ: number) => { x: number; y: number; q: number } | null,
+  ): MapFrame['sideFalls'][number] | null {
+    const { track, terrain } = this.data!;
+    const d = p.near.d;
+    const ax = sampleAt(track, track.x, d), az = sampleAt(track, track.z, d), ay = terrain.worldY(ax, az);
+    const v = vis(ax, ay, az, 3);
+    if (!v) return null;
+    // which side of the trail (in the world) the waterfall is on…
+    const hx = sampleAt(track, track.hdx, d), hz = sampleAt(track, track.hdz, d);
+    const side = Math.sign(hx * (p.z - az) - hz * (p.x - ax)) || 1;
+    // …and which way that is on screen
+    const nx = -hz * side, nz = hx * side;
+    const off = this.rig!.camDist * 0.05;
+    const q = this.projectF(ax + nx * off, terrain.worldY(ax + nx * off, az + nz * off), az + nz * off);
+    let sx = q.x - v.x, sy = q.y - v.y;
+    const l = Math.hypot(sx, sy);
+    if (l < 1e-3) { sx = 1; sy = 0; } else { sx /= l; sy /= l; }
+    const px = clamp(22 / Math.max(0.75, v.q), 18, 26); // clear of the hiker sprite
+    return {
+      x: Math.round(v.x + sx * px), y: Math.round(v.y + sy * px * 0.6), q: v.q,
+      sx: Math.round(v.x + sx * 6), sy: Math.round(v.y + sy * 4), left: sx < 0,
+    };
   }
 
   /**

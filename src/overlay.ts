@@ -29,6 +29,11 @@ export interface MapFrame {
   bridges: { x: number; y: number; q: number; tx: number; ty: number }[];
   vehicles: { x: number; y: number; left: boolean; moto: boolean; color: string }[];
   falls: { x: number; y: number; q: number }[];
+  /**
+   * A waterfall a short detour off the route, shown beside the trail where the route passes closest
+   * (x/y), with an arrow sign at the trail edge (sx/sy) pointing towards it (left = arrow points left).
+   */
+  sideFalls: { x: number; y: number; q: number; sx: number; sy: number; left: boolean }[];
   camps: { x: number; y: number; q: number }[];
   springs: { x: number; y: number; q: number }[];
 }
@@ -196,6 +201,95 @@ const MOTO = [
   '.kkkky',
   'kk..kk',
 ];
+/**
+ * Waterfall sprites: g/G moss, r/R rock, w falling water (streaks scroll down), f foam (flickers),
+ * p splash pool. Drawn by drawFallSprite with the animation applied per pixel.
+ */
+const FALL_L = [
+  '...gGGg.gGgg...',
+  '..gGrrRgRrrGg..',
+  '.gGrRRwwwRrrGg.',
+  '.grRrwwwwwRrRg.',
+  '..rRrwwwwwrRr..',
+  '.grrRwwwwwRrrg.',
+  '..rRrwwwwwrRr..',
+  '..rrRwwwwwRrr..',
+  '.grRrwwwwwrRrg.',
+  '..rRrwwwwwRrr..',
+  '.rrRrwwwwwrRrr.',
+  'rrRrfwfwfwfrRrr',
+  '.ppfpfpfpfpfpp.',
+  '..ppppppppppp..',
+];
+const FALL_M = [
+  '..gGgGg..',
+  '.gRrrrRg.',
+  '.rRwwwRr.',
+  '.rrwwwrr.',
+  '.rRwwwRr.',
+  '.rrwwwrr.',
+  'rRrwwwrRr',
+  '.pfwfwfp.',
+  '..ppppp..',
+];
+function drawFallSprite(ctx: CanvasRenderingContext2D, rows: string[], x: number, y: number, t: number, night: boolean) {
+  const w = rows[0].length, h = rows.length;
+  const x0 = Math.round(x - w / 2), y0 = Math.round(y - h + 2);
+  const water = night ? [C.dusk, C.sky, C.skyLight] : [C.sky, C.skyLight, C.white];
+  const scroll = Math.floor(t * 10), flick = Math.floor(t * 6);
+  const col: Record<string, string> = night
+    ? { g: C.tealDeep, G: C.moss, r: C.ink2, R: C.night, p: C.dusk }
+    : { g: C.forest, G: C.greenLight, r: C.rockDark, R: C.rock, p: C.sky };
+  rows.forEach((row, yy) => {
+    for (let xx = 0; xx < row.length; xx++) {
+      const ch = row[xx];
+      if (ch === '.') continue;
+      ctx.fillStyle =
+        ch === 'w' ? water[(((yy - scroll + xx * 2) % 3) + 3) % 3]
+        : ch === 'f' ? ((xx + flick) % 2 ? (night ? C.skyLight : C.white) : water[1])
+        : col[ch];
+      ctx.fillRect(x0 + xx, y0 + yy, 1, 1);
+    }
+  });
+}
+
+const ARROW_SIGN = ['kkkkkkk', 'kmmmamk', 'kaaaaak', 'kmmmamk', 'kkkkkkk', '...L...', '...L...'];
+
+/**
+ * A waterfall: mossy rock walls, water streaming down (2·hw+1 px wide, h tall) and a splash pool,
+ * bottom-centre at (x, y).
+ */
+function drawFall(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, hw: number, t: number, night: boolean) {
+  const top = y - h;
+  // rock walls and the lip, with a little moss
+  ctx.fillStyle = night ? C.ink2 : C.rockDark;
+  ctx.fillRect(x - hw - 2, top, 2, h);
+  ctx.fillRect(x + hw + 1, top, 2, h);
+  ctx.fillRect(x - hw - 1, top - 1, hw * 2 + 3, 1);
+  ctx.fillStyle = night ? C.tealDeep : C.green;
+  ctx.fillRect(x - hw - 2, top - 1, 2, 1);
+  ctx.fillRect(x + hw + 1, top + 2, 1, 2);
+  ctx.fillRect(x - hw - 2, top + Math.floor(h / 2), 1, 2);
+  // falling water: streaks scrolling down
+  const water = night ? [C.dusk, C.sky, C.skyLight] : [C.sky, C.skyLight, C.white];
+  const scroll = Math.floor(t * 10);
+  for (let yy = 0; yy < h; yy++) {
+    for (let xx = -hw; xx <= hw; xx++) {
+      ctx.fillStyle = water[(((yy - scroll + xx * 2) % 3) + 3) % 3];
+      ctx.fillRect(x + xx, top + yy, 1, 1);
+    }
+  }
+  // splash pool with foam
+  ctx.fillStyle = night ? C.dusk : C.sky;
+  ctx.fillRect(x - hw - 3, y, hw * 2 + 7, 1);
+  ctx.fillRect(x - hw - 1, y + 1, hw * 2 + 3, 1);
+  ctx.fillStyle = night ? C.skyLight : C.white;
+  const sp = Math.floor(t * 5) % 2;
+  ctx.fillRect(x - hw - 1 - sp, y - 1, 2, 1);
+  ctx.fillRect(x + hw + sp, y - 1, 2, 1);
+  ctx.fillRect(x - 1 + sp, y, 2, 1);
+}
+
 const CAMP_SIGN = ['kkkkkkk', 'kmmammk', 'kmaaamk', 'kkkkkkk', '...L...', '...L...'];
 const DROP = ['.s.', 'sSs', 'SsS', '.S.'];
 
@@ -234,26 +328,16 @@ function drawMap(o: OverlayInput) {
     if (r.q < 1.1) ctx.fillRect(r.x + 1 - ph, r.y - 2 + (ph & 1), 1, 1);
   }
 
-  // waterfalls: a cliff with water tumbling down it and spray at the bottom
+  // waterfalls at their real spot, sized by distance
   for (const f of m.falls) {
-    const h = f.q < 1.2 ? 11 : f.q < 2.2 ? 8 : 5;
-    const top = f.y - h;
-    ctx.fillStyle = night ? C.ink2 : C.rockDark;
-    ctx.fillRect(f.x - 3, top, 1, h);
-    ctx.fillRect(f.x + 3, top, 1, h);
-    ctx.fillRect(f.x - 2, top - 1, 5, 1);
-    const water = night ? [C.dusk, C.sky, C.skyLight] : [C.sky, C.skyLight, C.white];
-    for (let yy = 0; yy < h; yy++) {
-      for (let xx = -2; xx <= 2; xx++) {
-        ctx.fillStyle = water[(((yy - Math.floor(t * 9) + xx * 2) % 3) + 3) % 3];
-        ctx.fillRect(f.x + xx, top + yy, 1, 1);
-      }
-    }
-    ctx.fillStyle = night ? C.skyLight : C.white;
-    const sp = Math.floor(t * 5) % 2;
-    ctx.fillRect(f.x - 3 - sp, f.y, 2, 1);
-    ctx.fillRect(f.x + 2 + sp, f.y, 2, 1);
-    ctx.fillRect(f.x - 1 + sp, f.y + 1, 2, 1);
+    if (f.q < 1.2) drawFallSprite(ctx, FALL_M, f.x, f.y, t, night);
+    else drawFall(ctx, f.x, f.y, f.q < 2.2 ? 8 : 5, 2, t, night);
+  }
+  // …and one just off the route, brought up beside the trail with a sign pointing the way
+  for (const f of m.sideFalls) {
+    if (f.q < 2.6) drawFallSprite(ctx, FALL_L, f.x, f.y, t, night);
+    else drawFallSprite(ctx, FALL_M, f.x, f.y, t, night);
+    drawSprite(ctx, ARROW_SIGN, f.sx, f.sy + 1, { keys: { k: C.ink, m: C.cream, a: C.sky, L: C.brown }, flip: f.left });
   }
 
   // bridges: a plank deck along the route with a rail and posts either side

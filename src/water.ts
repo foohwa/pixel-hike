@@ -124,12 +124,16 @@ function mergeExtras(data: WaterData, pois: Poi[]) {
 async function fetchExtras(b: BBox): Promise<Poi[] | null> {
   const bb = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
   const query = `[out:json][timeout:20];(node["waterway"="waterfall"](${bb});node["natural"~"^(spring|waterfall)$"](${bb}););out;`;
-  for (const url of ENDPOINTS) {
-    try {
-      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: AbortSignal.timeout(25_000) });
-      if (!res.ok) throw new Error(`${res.status}`);
-      return parse((await res.json()) as OverpassResult).pois;
-    } catch { /* next server */ }
+  // the public servers are often "at capacity" for a minute or two: back off and try again
+  for (let round = 0; round < 4; round++) {
+    for (const url of ENDPOINTS) {
+      try {
+        const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: AbortSignal.timeout(25_000) });
+        if (!res.ok) throw new Error(`${res.status}`);
+        return parse((await res.json()) as OverpassResult).pois;
+      } catch { /* next server */ }
+    }
+    await new Promise((r) => setTimeout(r, 5000 * 2 ** round));
   }
   return null;
 }
