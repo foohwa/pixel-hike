@@ -21,6 +21,7 @@ import {
   type Activity, type Checkpoint, type CheckpointKind, type Track,
 } from './track';
 import { newId, PHOTO_SECONDS, pixelatePhoto, placePhoto, readPhoto, speakable, type Bubble, type Photo, type PhotoColors } from './moments';
+import { drawPoster, upscale } from './poster';
 import { loadWeather, weatherSummary, type WeatherMode, type WeatherSeries } from './weather';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
@@ -97,6 +98,7 @@ const ui = {
   addBubble: $<HTMLButtonElement>('addBubble'),
   bubbles: $('bubbles'),
   quality: $<HTMLSelectElement>('quality'),
+  poster: $<HTMLButtonElement>('poster'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
   download: $<HTMLAnchorElement>('download'),
@@ -225,7 +227,7 @@ async function loadParsed(parsed: ParsedTrack) {
   rebuild();
   state.t = 0;
   state.playing = true;
-  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble].forEach((el) => (el.disabled = false));
+  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble, ui.poster].forEach((el) => (el.disabled = false));
   renderMoments();
   void refreshPhotoArt();
   ui.play.innerHTML = '&#9208;';
@@ -1343,6 +1345,31 @@ for (const el of [ui.drop, ui.screen]) {
   });
 }
 
+/** Builds the poster (216×270 game px, ×5). */
+async function makePoster() {
+  if (!state.track) return null;
+  const thumbs: HTMLCanvasElement[] = [];
+  for (const p of shownPhotos().sort((a, b) => a.d - b.d).slice(0, 4)) {
+    thumbs.push(await pixelatePhoto(p.src, ui.photoColors.value as PhotoColors, 46, 26));
+  }
+  const small = drawPoster({
+    renderer, track: state.track, checkpoints: state.checkpoints, title: ui.title.value || 'My Hike', activity: state.activity,
+    tzOffsetMin: Number(ui.tz.value || 0), hero: heroSet(), logo: state.logoSet, photos: thumbs,
+  });
+  renderer.renderAt(state.t);
+  return small && upscale(small, 5);
+}
+
+ui.poster.onclick = async () => {
+  const big = await makePoster();
+  if (!big) return;
+  const blob = await new Promise<Blob | null>((r) => big.toBlob(r, 'image/png'));
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  download(url, `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-poster.png`);
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+};
+
 let exportAbort: AbortController | null = null;
 ui.export.onclick = async () => {
   if (!state.timeline) return;
@@ -1446,6 +1473,7 @@ Object.assign(window, {
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
     },
+    posterDataUrl: async () => (await makePoster())?.toDataURL('image/png'),
     weatherReady() { return ensureWeather().then(() => state.weather && { hours: state.weather.precip.length, summary: ui.weatherInfo.textContent }); },
     setWeather(m: WeatherMode) { ui.weather.value = m; rebuild(); return ensureWeather(); },
     waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length, pois: state.water.pois.length, extras: !!state.water.extras, surface: state.surface }); },

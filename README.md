@@ -30,6 +30,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **Music** — four bundled CC0 chiptunes by Juhani Junkala (auto-picked per activity), or your own file. Looped to the video length with a fade-out, played in the preview and muxed into the MP4 as AAC. Credits in [`public/music/CREDITS.md`](public/music/CREDITS.md).
 - **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset edits* forgets them.
 - **You are here** — a marker in the checkpoint list follows the hiker; passed checkpoints grey out, click a checkpoint's km line to jump there.
+- **Pixel poster** — *Poster PNG* makes a 1080×1350 still of the whole hike as a game level map: title and date, the route on the 3D diorama (or the 2D map, whichever view you picked) lit by a good time of day, with its checkpoint flags and the summit's name, six stat tiles, up to four of your photos as little polaroids, the elevation profile and your character cheering (plus the event logo).
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).
 
 ## Run
@@ -78,6 +79,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/moments.ts`, `src/exif.ts` | Photo moments (EXIF time / GPS → spot on the track, pixel-art polaroid) and speech bubbles |
 | `src/weather.ts` | Open-Meteo hourly weather (cached), weather at a moment, rain / splash / lightning drawing |
 | `src/wildlife.ts` | Region → species, encounter planning along the track, animal sprites and how they move |
+| `src/poster.ts` | The PNG poster: route snapshot (`PixelRenderer.snapshot`), stats tiles, photos, profile |
 | `src/logo.ts` | Event logo: background removal, crop, pixel-grid downsampling with colour reduction, outline |
 | `src/store.ts` | Per-track saved settings and checkpoint pins/deletions (localStorage), merge with auto-detection |
 

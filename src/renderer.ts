@@ -251,7 +251,13 @@ export class PixelRenderer {
 
   setAspect(aspect: Aspect) {
     this.aspect = aspect;
-    [this.W, this.H] = LOW_RES[aspect];
+    this.resize(...LOW_RES[aspect]);
+  }
+
+  /** Render size in game pixels (the video is W×H; posters use other sizes for a moment). */
+  private resize(W: number, H: number) {
+    this.W = W;
+    this.H = H;
     this.gl.setSize(this.W, this.H, false);
     this.rt.setSize(this.W, this.H);
     this.overlay.width = this.W;
@@ -557,6 +563,28 @@ export class PixelRenderer {
     };
   }
 
+  /** Poster camera: framed on the route itself (not the whole diorama), filling the picture. */
+  private posterView(orbit: number) {
+    const { terrain, track } = this.data!;
+    const b = track.bounds;
+    const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+    const target = new THREE.Vector3(cx, terrain.worldY(cx, cz) * 0.5 + terrain.center.y * 0.5, cz);
+    const bw = b.maxX - b.minX, bh = b.maxZ - b.minZ;
+    const vfov = (this.camera.fov * Math.PI) / 180;
+    if (this.mode === '2d') {
+      const half = Math.max(bh / 2, bw / 2 / this.camera.aspect) * 1.16;
+      const h = half / Math.tan(vfov / 2);
+      return { pos: new THREE.Vector3(cx, target.y + h, cz + 0.01), target };
+    }
+    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
+    const R = ((Math.max(bw, bh) / 2) / Math.tan(Math.min(vfov, hfov) / 2)) * 0.98;
+    let bx = -track.hdx[track.n - 1], bz = -track.hdz[track.n - 1];
+    const a = 0.6 + orbit;
+    [bx, bz] = [bx * Math.cos(a) - bz * Math.sin(a), bx * Math.sin(a) + bz * Math.cos(a)];
+    const el = (50 * Math.PI) / 180;
+    return { pos: new THREE.Vector3(cx + bx * R * Math.cos(el), target.y + R * Math.sin(el), cz + bz * R * Math.cos(el)), target };
+  }
+
   renderAt(tSec: number) {
     if (!this.data || !this.rig) return;
     const { track, terrain, timeline, checkpoints } = this.data;
@@ -586,6 +614,10 @@ export class PixelRenderer {
       over = this.overviewPos('end', st.outroU * 0.7);
       u = 1 - ease(clamp(st.outroU / 0.55, 0, 1));
     }
+    if (this.snap) {
+      over = this.posterView(this.snap.orbit);
+      u = 0;
+    }
     const camPos = over.pos.clone().lerp(follow.pos, u);
     const camTgt = over.target.clone().lerp(follow.target, u);
     this.camera.up.set(0, 1, 0);
@@ -595,8 +627,8 @@ export class PixelRenderer {
     this.camera.updateMatrixWorld();
 
     // ---- sky / light
-    const ms = st.clockMs;
-    const weather = st.phase === 'gateStart' || st.phase === 'gateFinish' ? NO_WEATHER : weatherAt(this.data.weather.series, this.data.weather.mode, ms);
+    const ms = this.snap?.ms ?? st.clockMs;
+    const weather = st.phase === 'gateStart' || st.phase === 'gateFinish' || this.snap ? NO_WEATHER : weatherAt(this.data.weather.series, this.data.weather.mode, ms);
     const overcast = clamp(weather.cloud * 0.75 + weather.rain * 0.5, 0, 1);
     const sky = withWeather(skyAt(ms, track.lat0, track.lon0), overcast);
     const sp = sunPosition(ms, track.lat0, track.lon0);
@@ -621,7 +653,7 @@ export class PixelRenderer {
     shared.uBeam.value = env.life ? 1 : 0;
     shared.uLampDir.value.set(sampleAt(track, track.hdx, st.d), sampleAt(track, track.hdz, st.d)).normalize();
     if (env.life) shared.uLampR.value = r.camDist * 0.22; // the beam reaches a bit further than the pool
-    terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart'
+    terrain.mist.uMist.value = env.clouds && st.phase !== 'gateStart' && !this.snap
       ? Math.max(this.mistAt(ms), overcast * 0.45 + weather.rain * 0.35) * (is2d ? 0.6 : 1)
       : 0;
     terrain.mist.uMistClear.value = r.camDist * 0.55;
@@ -696,7 +728,7 @@ export class PixelRenderer {
     } else this.view = 'side';
     const effort = effortAt(track, st.d, st.t, env.effort && st.phase === 'move');
     const heroT = effort.slow ? st.t * 0.72 : st.t; // a heavier, slower step when flat out
-    if (inScene && hiker.visible) {
+    if (inScene && hiker.visible && !this.snap) {
       const anim = pickAnim({ state: st, track, activity: this.data.activity, sky });
       const feet = new THREE.Vector3(hx, hy, hz);
       const useShadowDir = env.light && shared.uShadow.value > 0;
@@ -737,7 +769,8 @@ export class PixelRenderer {
       : null;
     const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
-    drawOverlay({
+    if (this.snap) this.overlayCtx.clearRect(0, 0, this.W, this.H);
+    else drawOverlay({
       ctx: this.overlayCtx,
       W: this.W,
       H: this.H,
@@ -804,6 +837,44 @@ export class PixelRenderer {
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);
+  }
+
+  /** Set while rendering a poster snapshot: the whole diorama, at this clock time, no HUD / walker. */
+  private snap: { ms: number; orbit: number } | null = null;
+
+  /**
+   * The whole route as a still: w×h game pixels, from the overview camera (3D diorama or the map,
+   * whichever view is chosen), lit at `ms`, trail drawn in full, no HUD. Also gives each enabled
+   * checkpoint's spot in the picture (hidden behind a ridge → visible: false).
+   */
+  snapshot(w: number, h: number, ms: number) {
+    if (!this.data || !this.rig) return null;
+    const prev: [number, number] = [this.W, this.H];
+    this.resize(w, h);
+    this.snap = { ms, orbit: 0.25 };
+    try {
+      this.renderAt(this.data.timeline.duration);
+      const image = document.createElement('canvas');
+      image.width = w;
+      image.height = h;
+      image.getContext('2d')!.drawImage(this.canvas, 0, 0);
+      const { track, terrain } = this.data;
+      const points = new Map<string, ScreenPoint>();
+      for (const cp of this.data.checkpoints) {
+        if (!cp.enabled) continue;
+        const x = sampleAt(track, track.x, cp.d), z = sampleAt(track, track.z, cp.d);
+        const y = terrain.worldY(x, z);
+        const p = this.project(x, y, z);
+        if (this.mode === '3d' && p.visible && this.ridgeAbove(x, y, z, terrain.spacing * 0.2) > terrain.spacing * 0.08) p.visible = false;
+        points.set(cp.id, p);
+      }
+      return { image, points };
+    } finally {
+      this.snap = null;
+      this.resize(...prev);
+      this.cpHidden.clear();
+      this.mapT = -1;
+    }
   }
 
   /** Animals sitting beside the trail near the walker, on screen (and dashing off as you pass). */
