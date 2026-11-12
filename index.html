@@ -2,8 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1a1c2c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Pixel Hike" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pixel Hike — cute pixel route videos</title>
   </head>
   <body>
@@ -15,7 +21,7 @@
     <main class="layout">
       <aside class="panel" id="controls">
         <label class="drop" id="drop">
-          <input type="file" id="file" accept=".gpx,.fit,application/gpx+xml" hidden />
+          <input type="file" id="file" accept=".gpx,.fit,application/gpx+xml,application/octet-stream" hidden />
           <strong>Drop a GPX or FIT file</strong>
           <small>Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em> or <em>Export as FIT file</em></small>
         </label>

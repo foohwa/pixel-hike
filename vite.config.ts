@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -53,4 +53,19 @@ function editsOnDisk(): Plugin {
   };
 }
 
-export default defineConfig({ plugins: [editsOnDisk()] });
+/**
+ * Build-only: public/ is copied into dist/ as-is, and public/samples/ holds private tracks
+ * (names + exact routes) for the dev server. Never ship them.
+ */
+function dropPrivateSamples(): Plugin {
+  return {
+    name: 'pixelhike-drop-private-samples',
+    apply: 'build',
+    closeBundle() {
+      const dir = join(process.cwd(), 'dist', 'samples');
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+export default defineConfig({ plugins: [editsOnDisk(), dropPrivateSamples()] });

@@ -35,6 +35,8 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **GIF** — *GIF (15 s loop)* turns the highlight into a looping 640×360 GIF (360×640 in 9:16), ~4 MB, made in the browser with the game palette as its colour table.
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).
 
+- **On your phone** — an installable web app (PWA): once it's hosted, open it in Chrome/Safari and *Add to Home Screen*. On Android, share a GPX/FIT (plus photos) from the Suunto app straight to *Pixel Hike*; on iPhone, save the export to Files and tap *Tap to open*. The preview sits pinned at the top while the settings scroll under it; works offline once opened (map tiles and weather excepted). The build never includes `public/samples/`.
+
 ## Run
 
 ```sh
@@ -83,6 +85,8 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/wildlife.ts` | Region → species, encounter planning along the track, animal sprites and how they move |
 | `src/poster.ts` | The PNG poster: route snapshot (`PixelRenderer.snapshot`), stats tiles, photos, profile |
 | `src/gif.ts` | Animated GIF encoder (global palette, LZW) for the highlight loop |
+| `public/manifest.webmanifest`, `public/sw.js` | Installable app: icons, offline cache, share target (Android) + file handlers (desktop) |
+| `scripts/make-icons.mjs` | Draws the app icons from the game's own sprites |
 | `src/logo.ts` | Event logo: background removal, crop, pixel-grid downsampling with colour reduction, outline |
 | `src/store.ts` | Per-track saved settings and checkpoint pins/deletions (localStorage), merge with auto-detection |
 

@@ -624,7 +624,7 @@ function applySettings(s: Record<string, unknown>) {
   if ('companion' in s) { state.companion = (s.companion as CharacterId | null) ?? null; ui.companion.value = state.companion ?? ''; }
   if (typeof s.duration === 'number') ui.duration.value = String(s.duration);
   if (s.mode === '2d' || s.mode === '3d') { renderer.setMode(s.mode); setSeg(ui.mode, s.mode); }
-  if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); fitCanvas(); }
+  if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); ui.screen.classList.toggle('tall', s.aspect === 'portrait'); fitCanvas(); }
   if (typeof s.minimap === 'boolean') { ui.minimap.checked = s.minimap; renderer.showMinimap = s.minimap; }
   if (typeof s.tz === 'number') ui.tz.value = String(s.tz);
   if (typeof s.music === 'string') ui.music.value = s.music;
@@ -811,6 +811,10 @@ function flash(msg: string) {
 ui.photoFile.onchange = async () => {
   const files = [...(ui.photoFile.files ?? [])];
   ui.photoFile.value = '';
+  await addPhotos(files);
+};
+
+async function addPhotos(files: File[]) {
   if (!files.length || !state.track) return;
   const track = state.track;
   const fallback = scrubD() ?? track.stats.distance / 2;
@@ -836,7 +840,7 @@ ui.photoFile.onchange = async () => {
       failed ? `${failed} couldn't be read` : ''].filter(Boolean).join(' · '),
   );
   await refreshPhotoArt();
-};
+}
 ui.photoColors.onchange = () => void refreshPhotoArt();
 ui.weather.onchange = () => { rebuild(); void ensureWeather(); };
 
@@ -1132,7 +1136,7 @@ function seek(t: number) {
 }
 
 bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); persist(); });
-bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
+bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); ui.screen.classList.toggle('tall', v === 'portrait'); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
 bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
@@ -1351,8 +1355,8 @@ for (const el of [ui.drop, ui.screen]) {
   el.addEventListener('drop', async (e) => {
     e.preventDefault();
     ui.drop.classList.remove('hover');
-    const f = e.dataTransfer?.files?.[0];
-    if (f) await loadFile(f);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (files.length) await openFiles(files); // a track (+ photos dropped with it)
   });
 }
 
@@ -1514,6 +1518,57 @@ const ready =
         .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('No sample file'))))
         .then((b) => loadFile(new File([b], sampleKind === 'fit' ? 'hike.fit' : 'hike.gpx')))
     : Promise.resolve();
+
+// ------------------------------------------------------------------ phone / installed app
+
+const isTrackFile = (f: File) => /\.(gpx|fit)$/i.test(f.name) || /gpx|xml/.test(f.type);
+
+/** Opens files handed to the app (shared from another app, or "open with"): a track, then any photos. */
+async function openFiles(files: File[]) {
+  const track = files.find(isTrackFile) ?? files.find((f) => !f.type.startsWith('image/'));
+  if (track) await loadFile(track);
+  const photos = files.filter((f) => f.type.startsWith('image/'));
+  if (photos.length && state.track) await addPhotos(photos);
+  else if (photos.length) flash('Open a GPX or FIT file first, then add the photos.');
+}
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('No offline mode', e));
+}
+
+// touch screens: there's nothing to drop onto, you tap
+if (matchMedia('(pointer: coarse)').matches) {
+  const strong = ui.drop.querySelector('strong');
+  if (strong) strong.textContent = 'Tap to open a GPX or FIT file';
+}
+
+// iPhone / iPad: unusual file types can come up greyed out in the picker, so don't filter there
+if (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+  ui.file.removeAttribute('accept');
+}
+
+/** Files shared to the installed app (Android share sheet): the service worker parked them in a cache. */
+async function takeShared() {
+  if (!new URLSearchParams(location.search).has('shared') || !('caches' in window)) return;
+  history.replaceState(null, '', '/');
+  const cache = await caches.open('pixelhike-shared');
+  const files: File[] = [];
+  for (const req of await cache.keys()) {
+    const r = await cache.match(req);
+    if (!r) continue;
+    const name = decodeURIComponent(r.headers.get('x-name') ?? 'shared');
+    files.push(new File([await r.blob()], name, { type: r.headers.get('content-type') ?? '' }));
+    await cache.delete(req);
+  }
+  if (files.length) await openFiles(files);
+}
+void takeShared();
+
+// "Open with Pixel Hike" on desktop (installed app, file handlers)
+type LaunchParams = { files: { getFile(): Promise<File> }[] };
+(window as unknown as { launchQueue?: { setConsumer(f: (p: LaunchParams) => void): void } }).launchQueue?.setConsumer(async (p) => {
+  if (p.files?.length) await openFiles(await Promise.all(p.files.map((h) => h.getFile())));
+});
 
 Object.assign(window, {
   __pixelHike: {

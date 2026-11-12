@@ -169,3 +169,23 @@ details.fold:not([open]) { display: block; }
 .moments .meta { grid-column: 2 / 6; }
 .moments canvas { width: 36px; height: 27px; image-rendering: pixelated; border: 1px solid #000; background: var(--ink); object-fit: contain; }
 .moments .here-btn { padding: 0; width: 22px; height: 18px; box-shadow: none; font-size: 11px; }
+
+/* ---- phones / narrow windows: the preview first, pinned while the settings scroll under it */
+body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+@media (max-width: 860px) {
+  .top { padding: 8px 12px 0; }
+  .top h1 { font-size: 18px; }
+  .top p { font-size: 11px; }
+  .layout { padding: 6px 10px 10px; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+  .panel, .stage { min-width: 0; }
+  html, body { overflow-x: clip; } /* clip (not hidden): keeps the preview sticky */
+  .transport #clock { min-width: 0; font-size: 11px; white-space: nowrap; }
+  .stage { order: -1; position: sticky; top: 0; z-index: 5; background: var(--ink); padding: 6px 0; gap: 6px; }
+  .screen { flex: none; min-height: 0; height: min(56.25vw, 42vh); }
+  .screen.tall { height: 52vh; }
+  .panel { max-height: none; overflow: visible; }
+  .stats { font-size: 11px; }
+  .transport button { padding: 8px 14px; }
+  input[type='text'], input[type='number'], select { font-size: 16px; } /* no zoom-in on focus (iOS) */
+  .cps input[type='text'], .cps select, .lrow select, .zrow select, .zrow input[type='number'], #logoOpts select { font-size: 16px; }
+}
