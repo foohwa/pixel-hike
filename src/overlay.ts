@@ -521,7 +521,8 @@ function drawWorldSprites(o: OverlayInput) {
 
   // head-lamp sparkle at night
   const front = o.heroView === 'front' && o.hero.views?.front[anim];
-  const lampAt = o.heroView === 'back' && o.hero.views?.back[anim] ? null : front ? o.hero.views!.lampFront : o.hero.lamp;
+  const behind = (o.heroView === 'back' && o.hero.views?.back[anim]) || (o.heroView === 'back3' && o.hero.views?.back3[anim]);
+  const lampAt = behind ? null : front ? o.hero.views!.lampFront : o.hero.lamp;
   if (lampAt && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
     const lx = !front && o.facingLeft ? 15 - lampAt[0] : lampAt[0];
     ctx.fillStyle = Math.floor(t * 4) % 2 ? C.cream : C.yellow;

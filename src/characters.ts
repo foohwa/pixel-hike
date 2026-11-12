@@ -74,11 +74,18 @@ export interface SpriteSet {
    * Seen from behind (walking away from the camera) and from the front (walking towards it), for the
    * animations that have them; others fall back to the side view. Built-in people only.
    */
-  views?: { back: Partial<Record<Anim, HTMLCanvasElement[]>>; front: Partial<Record<Anim, HTMLCanvasElement[]>>; lampFront: [number, number] | null };
+  views?: {
+    back: Partial<Record<Anim, HTMLCanvasElement[]>>;
+    front: Partial<Record<Anim, HTMLCanvasElement[]>>;
+    /** Three-quarter back: walking away and to the right (…Flipped: away and to the left). */
+    back3: Partial<Record<Anim, HTMLCanvasElement[]>>;
+    back3Flipped: Partial<Record<Anim, HTMLCanvasElement[]>>;
+    lampFront: [number, number] | null;
+  };
 }
 
 /** Which way the camera sees the walker. */
-export type View = 'side' | 'back' | 'front';
+export type View = 'side' | 'back3' | 'back' | 'front';
 
 // ------------------------------------------------------------------ tiny raster helpers
 
@@ -409,9 +416,63 @@ function drawHumanView(p: ViewPose, o: Outfit, view: 'back' | 'front'): string[]
   return outline(g);
 }
 
+/**
+ * Three-quarter back: walking away from the camera and to the right. Mostly the back of the head and
+ * the pack, a sliver of cheek and the near (right) arm swinging; the far arm is mostly hidden.
+ */
+function drawHumanBack3(p: ViewPose, o: Outfit): string[] {
+  const g = grid();
+  const by = p.bob ?? 0;
+  const [liftFar, liftNear] = p.lift ?? [0, 0];
+  const leg = o.bareLegs ? 's' : 'p';
+  const legCol = (x: number, lift: number, shade: boolean) => {
+    const fy = 14 - lift;
+    R(g, x, 12, x + 1, fy - 1, shade && !o.bareLegs ? 'P' : leg);
+    if (o.bareLegs) R(g, x, 12, x + 1, 12, 'p');
+    R(g, x + 1, fy, x + 2, fy, 'o'); // feet point up-right
+  };
+  // far leg a little up-screen (further away), near leg in front
+  legCol(5, liftFar + 1, true);
+  legCol(7, liftNear, false);
+  R(g, 5, 12, 8, 12, 'p');
+  // far arm: just a hand peeking out on the left
+  const [aFar, aNear] = p.up ? [4, 4] : p.arms ?? [11, 11];
+  if (!p.up) P(g, 4, Math.min(aFar, 12) + by, 's');
+  // torso (the near side lighter), pack on the back, offset to the left as the body turns
+  R(g, 5, 9 + by, 9, 11 + by, 't');
+  R(g, 5, 9 + by, 5, 11 + by, 'T');
+  if (o.pack === 'vest') R(g, 5, 9 + by, 7, 10 + by, 'B');
+  if (o.pack === 'backpack') { R(g, 4, 8 + by, 7, 11 + by, 'B'); R(g, 5, 9 + by, 6, 9 + by, 'b'); P(g, 8, 9 + by, 'b'); }
+  // head: hair from behind, cheek + ear on the right
+  R(g, 6, 2 + by, 10, 8 + by, 'r');
+  R(g, 10, 5 + by, 10, 7 + by, 's');
+  P(g, 9, 6 + by, 's');
+  R(g, 7, 8 + by, 9, 8 + by, 's'); // neck
+  if (o.female) { R(g, 6, 8 + by, 6, 10 + by, 'r'); P(g, 6, 7 + by, 'c'); }
+  if (o.hat === 'lamp' || o.hat === 'band') R(g, 6, 4 + by, 10, 4 + by, 'h');
+  if (o.hat === 'lamp') P(g, 11, 4 + by, 'l'); // the lamp just showing round the front
+  if (o.hat === 'cap') { R(g, 6, 2 + by, 10, 3 + by, 'h'); R(g, 10, 4 + by, 11, 4 + by, 'H'); }
+  if (o.hat === 'bucket') { R(g, 6, 1 + by, 10, 3 + by, 'h'); R(g, 5, 4 + by, 11, 4 + by, 'H'); }
+  if (o.hat === 'none') { P(g, 7, 1 + by, 'r'); P(g, 9, 1 + by, 'r'); }
+  // near arm swings beside the body
+  const arm = o.shortSleeves ? 's' : 'T';
+  if (p.up) {
+    L(g, 10, 9 + by, 11, 4 + by, arm); P(g, 10, 9 + by, 'T'); P(g, 11, 4 + by, 's');
+    L(g, 5, 9 + by, 4, 4 + by, arm); P(g, 4, 4 + by, 's');
+  } else {
+    const hx = aNear < 11 ? 11 : aNear > 11 ? 9 : 10; // forward = further right
+    L(g, 10, 9 + by, hx, aNear + by, arm);
+    P(g, 10, 9 + by, 'T');
+    P(g, hx, aNear + by, 's');
+    if (o.wristband) P(g, hx, aNear + by - 1, 'x');
+    if (o.pole) L(g, hx + 1, aNear + by, hx + 2, 14, 'w');
+  }
+  return outline(g);
+}
+
 /** Front / back frames for the moving animations (sitting and sleeping stay side-on). */
-function humanViews(o: Outfit, view: 'back' | 'front'): Partial<Record<Anim, string[][]>> {
-  const d = (p: ViewPose) => drawHumanView(p, o, view);
+function humanViews(o: Outfit, view: 'back' | 'front' | 'back3'): Partial<Record<Anim, string[][]>> {
+  const d = (p: ViewPose) => (view === 'back3' ? drawHumanBack3(p, o) : drawHumanView(p, o, view));
   const walk = (lift: number, bob: number) => [
     d({ lift: [0, 0], arms: [10, 12] }),
     d({ bob, lift: [lift, 0], arms: [11, 11] }),
@@ -652,12 +713,15 @@ export function builtInSet(id: CharacterId, gender: Gender = 'male', look: Look 
   };
   if (outfit) {
     const o = { ...outfit, female };
-    const raster = (v: 'back' | 'front') => {
+    const raster = (v: 'back' | 'front' | 'back3', flip = false) => {
       const out: Partial<Record<Anim, HTMLCanvasElement[]>> = {};
-      for (const [a, list] of Object.entries(humanViews(o, v)) as [Anim, string[][]][]) out[a] = list.map((m) => rasterise(m, keys, false));
+      for (const [a, list] of Object.entries(humanViews(o, v)) as [Anim, string[][]][]) out[a] = list.map((m) => rasterise(m, keys, flip));
       return out;
     };
-    set.views = { back: raster('back'), front: raster('front'), lampFront: o.hat === 'lamp' ? [7, 4] : o.hat === 'bucket' ? [7, 2] : null };
+    set.views = {
+      back: raster('back'), front: raster('front'), back3: raster('back3'), back3Flipped: raster('back3', true),
+      lampFront: o.hat === 'lamp' ? [7, 4] : o.hat === 'bucket' ? [7, 2] : null,
+    };
   }
   builtIn.set(key, set);
   return set;
@@ -732,7 +796,8 @@ export function renderSheet(set: SpriteSet, scale = 1, guides = false): HTMLCanv
 
 /** Which animation to play for a given situation. */
 export function frameOf(set: SpriteSet, anim: Anim, t: number, flip: boolean, view: View = 'side'): HTMLCanvasElement {
-  const list = (view !== 'side' && set.views?.[view][anim]) || (flip ? set.flipped : set.frames)[anim];
+  const v = set.views;
+  const list = (view === 'back3' ? (flip ? v?.back3Flipped : v?.back3)?.[anim] : view !== 'side' && v?.[view][anim]) || (flip ? set.flipped : set.frames)[anim];
   const i = Math.floor(t * ANIM_INFO[anim].fps) % list.length;
   return list[i];
 }

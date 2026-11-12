@@ -1218,16 +1218,16 @@ Object.assign(window, {
     },
     zones() { return state.zones && { runs: state.zones.runs, tech: state.zones.tech, summary: ui.zoneSummary.textContent }; },
     forgetSaved() { if (state.track) forget(state.track); },
-    /** Front + back views of a character (rows: side, back, front; columns: animations' frames). */
+    /** A character's views (rows: side, 3/4 back, back, front; columns: animations' frames). */
     viewsDataUrl(c: CharacterId, scale = 6, g: Gender = 'male') {
       const set = c === 'me' ? builtInSet('me', g, state.look) : builtInSet(c, g);
       const anims = ['idle', 'walk', 'run', 'cheer'] as const;
       const cv = document.createElement('canvas');
-      cv.width = 16 * 12 * scale; cv.height = 16 * 3 * scale;
+      cv.width = 16 * 12 * scale; cv.height = 16 * 4 * scale;
       const ctx = cv.getContext('2d')!;
       ctx.imageSmoothingEnabled = false;
       ctx.fillStyle = '#3b3f6b'; ctx.fillRect(0, 0, cv.width, cv.height);
-      (['side', 'back', 'front'] as const).forEach((v, row) => {
+      (['side', 'back3', 'back', 'front'] as const).forEach((v, row) => {
         let col = 0;
         for (const a of anims) {
           const list = v === 'side' ? set.frames[a] : set.views?.[v][a] ?? [];

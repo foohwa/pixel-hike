@@ -12,7 +12,7 @@ import { C, PALETTE, rgb01 } from './palette';
 import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
-import { clamp, followDistance, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
+import { clamp, FOLLOW_YAW, followDistance, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 import { buildSites, hasSite, type Sites } from './sites3d';
 import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
@@ -437,7 +437,7 @@ export class PixelRenderer {
     const stride = (track.n - 1) / (K - 1);
     const camDist = followDistance(track);
     const pitch = (21 * Math.PI) / 180;
-    const yawOff = 0.55;
+    const yawOff = FOLLOW_YAW;
     const hor = camDist * Math.cos(pitch), ver = camDist * Math.sin(pitch);
     const margin = camDist * 0.05;
     const metresPerK = track.step * stride;
@@ -450,9 +450,14 @@ export class PixelRenderer {
     }
     const tx = gaussian(rx, 25 / metresPerK), ty = gaussian(ry, 25 / metresPerK), tz = gaussian(rz, 25 / metresPerK);
     const ox = new Float64Array(K), oz = new Float64Array(K), lift = new Float64Array(K);
+    // the camera swings round with a slowly smoothed heading, so on bends and switchbacks it lags a
+    // little and you see the walker turn side-on, away from it or towards it
+    const rhx = new Float64Array(K), rhz = new Float64Array(K);
+    for (let k = 0; k < K; k++) { const i = Math.round(k * stride); rhx[k] = track.hdx[i]; rhz[k] = track.hdz[i]; }
+    const shx = gaussian(rhx, 600 / metresPerK), shz = gaussian(rhz, 600 / metresPerK);
     for (let k = 0; k < K; k++) {
-      const i = Math.round(k * stride);
-      const hx = -track.hdx[i], hz = -track.hdz[i];
+      const l = Math.hypot(shx[k], shz[k]) || 1;
+      const hx = -shx[k] / l, hz = -shz[k] / l;
       ox[k] = (hx * Math.cos(yawOff) - hz * Math.sin(yawOff)) * hor;
       oz[k] = (hx * Math.sin(yawOff) + hz * Math.cos(yawOff)) * hor;
       // 2) how much higher the camera must go so the hiker isn't hidden by terrain
@@ -635,9 +640,12 @@ export class PixelRenderer {
       const d0 = Math.max(0, st.d - 60), d1 = Math.min(track.stats.distance, st.d + 60);
       const mx = sampleAt(track, track.x, d1) - sampleAt(track, track.x, d0), mz = sampleAt(track, track.z, d1) - sampleAt(track, track.z, d0);
       const cos = (mx * look.x + mz * look.z) / ((Math.hypot(mx, mz) || 1) * (Math.hypot(look.x, look.z) || 1));
+      // angle between where the walker heads and where the camera looks: 0° = straight away from it
+      const ang = (Math.acos(clamp(cos, -1, 1)) * 180) / Math.PI;
+      const ZONES: [View, number, number][] = [['back', 0, 20], ['back3', 20, 62], ['side', 62, 125], ['front', 125, 181]];
+      const cur = ZONES.find((z) => z[0] === this.view)!;
       let want: View = this.view;
-      if (want === 'back' ? cos < 0.93 : want === 'front' ? cos > 0.1 : false) want = 'side';
-      if (want === 'side') want = cos > 0.97 ? 'back' : cos < -0.1 ? 'front' : 'side';
+      if (ang < cur[1] - 6 || ang > cur[2] + 6) want = ZONES.find((z) => ang >= z[1] && ang < z[2])![0]; // 6° of hysteresis
       // only switch once the new view has held for a moment, and hold each view a little (no flicker)
       const jumped = Math.abs(st.t - this.viewT) > 0.2;
       this.viewT = st.t;

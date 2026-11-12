@@ -4,7 +4,7 @@ import { GATE_THEMES, type GateOptions } from './gate';
 import { openness } from './landmarks';
 import { C, rgb01 } from './palette';
 import { LIGHT_GLSL, shared, type Terrain } from './terrain';
-import { followDistance, sampleAt, type Checkpoint, type Track } from './track';
+import { FOLLOW_YAW, followDistance, sampleAt, type Checkpoint, type Track } from './track';
 
 /**
  * Checkpoint set pieces built into the 3D terrain (instead of stickers drawn over it), so they get the
@@ -68,11 +68,11 @@ export function buildSites(cps: Checkpoint[], track: Track, terrain: Terrain, ga
     /**
      * Which side of the trail a piece goes: the side facing compass direction `dir` if given, else the
      * one that shows to the right of the walker on screen (as the 2D props do), so the walker sprite
-     * doesn't cover it. The follow camera sits behind the walker, swung 0.55 rad (see buildRig).
+     * doesn't cover it. The follow camera sits behind the walker, swung FOLLOW_YAW (see buildRig).
      */
     const pickSide = (_off: number, dir?: number) => {
       if (dir != null) return Math.sign(-hz * Math.sin(dir) + hx * -Math.cos(dir)) || 1;
-      const bx = -hx, bz = -hz, yo = 0.55;
+      const bx = -hx, bz = -hz, yo = FOLLOW_YAW;
       const ox = bx * Math.cos(yo) - bz * Math.sin(yo), oz = bx * Math.sin(yo) + bz * Math.cos(yo);
       const rx = oz, rz = -ox; // screen right, on the ground
       return Math.sign(-hz * rx + hx * rz) || 1;

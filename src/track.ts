@@ -431,6 +431,13 @@ export function distAtCost(t: Track, c: number): number {
 
 // --- math ---------------------------------------------------------------
 
+/**
+ * How far the follow camera swings round from straight behind the walker (radians, towards their
+ * right): far enough to see the walker side-on-ish and the trail ahead, and that bends turn the walker
+ * towards or away from the camera.
+ */
+export const FOLLOW_YAW = 0.95;
+
 /** Distance of the follow camera from the hiker (world units): set pieces are sized to read at it. */
 export function followDistance(t: Pick<Track, 'bounds'>) {
   const b = t.bounds;
