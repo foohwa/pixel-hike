@@ -5,7 +5,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
 import type { GateOptions } from './gate';
 import { openness } from './landmarks';
-import { frameOf } from './characters';
+import { frameOf, type View } from './characters';
 import { SceneFigures } from './hero3d';
 import { clockText, drawOverlay, pickAnim, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
@@ -98,6 +98,12 @@ export class PixelRenderer {
   W = 320;
   H = 180;
   private facingLeft = false;
+  /** Side / back / front: how the camera sees the walker right now (with hysteresis so it doesn't flicker). */
+  private view: View = 'side';
+  private viewWant: View = 'side';
+  private viewWantT = 0;
+  private viewSince = 0;
+  private viewT = -1;
   private sunEvents: SunEvent[] = [];
   private toasts: { text: string; t: number }[] = [];
   /** Compass direction of the best outlook at each viewpoint checkpoint (cached per checkpoint). */
@@ -621,19 +627,40 @@ export class PixelRenderer {
 
     // ---- in 3D the walker + companion stand in the scene (lit, shadowed, hidden by what's in front)
     const inScene = !is2d && st.phase !== 'gateStart' && st.phase !== 'gateFinish';
+    if (inScene) {
+      // walking away from the camera shows your back, towards it your front
+      // (the camera turns with the smoothed trail, so compare with the walker's own step-by-step direction:
+      // a switchback or a sharp bend turns you away from — or towards — the camera for a moment)
+      const look = this.camera.getWorldDirection(this.tmp2);
+      const d0 = Math.max(0, st.d - 60), d1 = Math.min(track.stats.distance, st.d + 60);
+      const mx = sampleAt(track, track.x, d1) - sampleAt(track, track.x, d0), mz = sampleAt(track, track.z, d1) - sampleAt(track, track.z, d0);
+      const cos = (mx * look.x + mz * look.z) / ((Math.hypot(mx, mz) || 1) * (Math.hypot(look.x, look.z) || 1));
+      let want: View = this.view;
+      if (want === 'back' ? cos < 0.93 : want === 'front' ? cos > 0.1 : false) want = 'side';
+      if (want === 'side') want = cos > 0.97 ? 'back' : cos < -0.1 ? 'front' : 'side';
+      // only switch once the new view has held for a moment, and hold each view a little (no flicker)
+      const jumped = Math.abs(st.t - this.viewT) > 0.2;
+      this.viewT = st.t;
+      if (jumped) { this.view = want; this.viewSince = st.t; this.viewWant = want; }
+      else if (want === this.view) this.viewWant = want;
+      else {
+        if (this.viewWant !== want) { this.viewWant = want; this.viewWantT = st.t; }
+        if (st.t - this.viewWantT >= 0.3 && st.t - this.viewSince >= 0.6) { this.view = want; this.viewSince = st.t; }
+      }
+    } else this.view = 'side';
     if (inScene && hiker.visible) {
       const anim = pickAnim({ state: st, track, activity: this.data.activity, sky });
       const feet = new THREE.Vector3(hx, hy, hz);
       const useShadowDir = env.light && shared.uShadow.value > 0;
       const light = (useShadowDir ? shared.uShadowDir.value : shared.uSunDir.value).clone().normalize();
       const shadowK = useShadowDir ? shared.uShadow.value : sky.lamp < 0.5 ? 1 : 0;
-      this.figures.place(0, frameOf(this.data.hero, anim, st.t, this.facingLeft), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+      this.figures.place(0, frameOf(this.data.hero, anim, st.t, this.facingLeft, this.view), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
       if (this.data.pet && petAt) {
         // the companion's feet: its screen spot, at the walker's depth, dropped onto the ground
         const ndcZ = feet.clone().project(this.camera).z;
         const pf = new THREE.Vector3((petAt.x / this.W) * 2 - 1, 1 - (petAt.y / this.H) * 2, ndcZ).unproject(this.camera);
         pf.y = terrain.worldY(pf.x, pf.z);
-        this.figures.place(1, frameOf(this.data.pet, anim, st.t + 0.13, this.facingLeft), pf, petAt.x, petAt.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+        this.figures.place(1, frameOf(this.data.pet, anim, st.t + 0.13, this.facingLeft, this.view), pf, petAt.x, petAt.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
       } else this.figures.place(1, null, feet, 0, 0, this.camera, this.W, this.H, terrain, r.camDist, light, 0);
     } else this.figures.hide();
 
@@ -686,6 +713,7 @@ export class PixelRenderer {
       decor,
       map,
       heroInScene: inScene,
+      heroView: this.view,
       sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,
     });

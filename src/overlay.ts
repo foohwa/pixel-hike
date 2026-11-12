@@ -1,4 +1,4 @@
-import { frameOf, type Anim, type SpriteSet } from './characters';
+import { frameOf, type Anim, type SpriteSet, type View } from './characters';
 import { drawGateScene, drawMiniArch, type GateOptions } from './gate';
 import type { LogoSet } from './logo';
 import { drawText, textWidth } from './font';
@@ -80,6 +80,8 @@ export interface OverlayInput {
   map: MapFrame | null;
   /** The walker + companion are drawn in the 3D scene (hero3d.ts), not here. */
   heroInScene: boolean;
+  /** How the camera sees the walker (the head-lamp only shows from the side and front). */
+  heroView: View;
   /** Checkpoints built into the 3D scene (sites3d.ts): no sprite for these. */
   sited: Set<string> | null;
   env: EnvOptions;
@@ -518,10 +520,12 @@ function drawWorldSprites(o: OverlayInput) {
   }
 
   // head-lamp sparkle at night
-  if (o.hero.lamp && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
-    const lx = o.facingLeft ? 15 - o.hero.lamp[0] : o.hero.lamp[0];
+  const front = o.heroView === 'front' && o.hero.views?.front[anim];
+  const lampAt = o.heroView === 'back' && o.hero.views?.back[anim] ? null : front ? o.hero.views!.lampFront : o.hero.lamp;
+  if (lampAt && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
+    const lx = !front && o.facingLeft ? 15 - lampAt[0] : lampAt[0];
     ctx.fillStyle = Math.floor(t * 4) % 2 ? C.cream : C.yellow;
-    ctx.fillRect(h.x - 8 + lx, h.y - 16 + o.hero.lamp[1], 1, 1);
+    ctx.fillRect(h.x - 8 + lx, h.y - 16 + lampAt[1], 1, 1);
   }
 
   // zZz while sleeping at camp

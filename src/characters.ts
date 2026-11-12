@@ -70,7 +70,15 @@ export interface SpriteSet {
   flipped: Record<Anim, HTMLCanvasElement[]>;
   /** Pixel inside the frame where the head-lamp sits (for the night glow), or null. */
   lamp: [number, number] | null;
+  /**
+   * Seen from behind (walking away from the camera) and from the front (walking towards it), for the
+   * animations that have them; others fall back to the side view. Built-in people only.
+   */
+  views?: { back: Partial<Record<Anim, HTMLCanvasElement[]>>; front: Partial<Record<Anim, HTMLCanvasElement[]>>; lampFront: [number, number] | null };
 }
+
+/** Which way the camera sees the walker. */
+export type View = 'side' | 'back' | 'front';
 
 // ------------------------------------------------------------------ tiny raster helpers
 
@@ -304,6 +312,127 @@ function drawHuman(p: HumanPose, o: Outfit): string[] {
   return outline(g);
 }
 
+// ------------------------------------------------------------------ people, front + back
+
+interface ViewPose {
+  bob?: number; // whole upper body dy
+  lift?: [number, number]; // left / right foot lift (px)
+  arms?: [number, number]; // left / right hand row (higher = swinging forward / up)
+  up?: boolean; // both arms up (cheer)
+  blink?: boolean;
+}
+
+/**
+ * The same person seen from behind or from the front (16×16, centred, feet on row 14). Columns 5–10
+ * are the body; arms hang at 4 and 11; a pack shows from behind, the vest straps + bib from the front.
+ */
+function drawHumanView(p: ViewPose, o: Outfit, view: 'back' | 'front'): string[] {
+  const g = grid();
+  const by = p.bob ?? 0;
+  const front = view === 'front';
+  const [liftL, liftR] = p.lift ?? [0, 0];
+  const leg = o.bareLegs ? 's' : 'p';
+
+  // legs: two 2-px columns, a lifted foot sits higher; shorts cover the top row
+  const drawLegCol = (x: number, lift: number) => {
+    const fy = 14 - lift;
+    R(g, x, 12, x + 1, fy - 1, leg);
+    if (o.bareLegs) R(g, x, 12, x + 1, 12, 'p');
+    R(g, x, fy, x + 1, fy, 'o');
+  };
+  drawLegCol(5, liftL);
+  drawLegCol(8, liftR);
+  R(g, 5, 12, 9, 12, 'p'); // hips
+
+  // torso, darker on one side for a bit of roundness
+  R(g, 5, 9 + by, 9, 11 + by, 't');
+  R(g, 9, 9 + by, 9, 11 + by, 'T');
+  if (front) {
+    if (o.pack === 'vest') { P(g, 5, 9 + by, 'B'); P(g, 9, 9 + by, 'B'); P(g, 5, 10 + by, 'W'); P(g, 9, 10 + by, 'W'); }
+    if (o.pack === 'backpack') { P(g, 5, 9 + by, 'b'); P(g, 9, 9 + by, 'b'); P(g, 5, 10 + by, 'b'); P(g, 9, 10 + by, 'b'); }
+    if (o.bib) { R(g, 6, 10 + by, 8, 11 + by, 'W'); P(g, 7, 10 + by, o.pack === 'vest' ? 'y' : 'W'); }
+  } else {
+    if (o.pack === 'vest') R(g, 6, 9 + by, 8, 10 + by, 'B');
+    if (o.pack === 'backpack') { R(g, 5, 8 + by, 9, 11 + by, 'B'); R(g, 6, 9 + by, 8, 9 + by, 'b'); P(g, 5, 7 + by, 'B'); P(g, 9, 7 + by, 'B'); }
+  }
+
+  // head: hair all round from behind; a face from the front
+  const hy = by;
+  R(g, 5, 3 + hy, 9, 8 + hy, front ? 's' : 'r');
+  R(g, 5, 2 + hy, 9, 4 + hy, 'r');
+  if (front) {
+    P(g, 5, 5 + hy, 'r'); P(g, 9, 5 + hy, 'r'); // sideburns
+    if (p.blink) { P(g, 6, 6 + hy, 'k'); P(g, 8, 6 + hy, 'k'); }
+    else { P(g, 6, 6 + hy, 'k'); P(g, 6, 7 + hy, 'k'); P(g, 8, 6 + hy, 'k'); P(g, 8, 7 + hy, 'k'); }
+    P(g, 5, 7 + hy, 'c'); P(g, 9, 7 + hy, 'c'); // cheeks
+    if (o.female) { R(g, 5, 5 + hy, 7, 5 + hy, 'r'); P(g, 4, 6 + hy, 'r'); P(g, 10, 6 + hy, 'r'); }
+  } else {
+    R(g, 6, 8 + hy, 8, 8 + hy, 's'); // neck
+    if (o.female) { R(g, 7, 8 + hy, 7, 10 + hy, 'r'); P(g, 7, 7 + hy, 'c'); } // ponytail over the back
+  }
+  // headwear
+  if (o.hat === 'lamp') {
+    R(g, 5, 4 + hy, 9, 4 + hy, 'h');
+    if (front) P(g, 7, 4 + hy, 'l');
+  } else if (o.hat === 'band') {
+    R(g, 5, 4 + hy, 9, 4 + hy, 'h');
+    if (!front) { P(g, 6, 5 + hy, 'h'); P(g, 8, 5 + hy, 'h'); }
+  } else if (o.hat === 'cap') {
+    R(g, 5, 2 + hy, 9, 3 + hy, 'h');
+    if (front) R(g, 4, 4 + hy, 10, 4 + hy, 'H');
+    else P(g, 7, 4 + hy, 'H');
+  } else if (o.hat === 'bucket') {
+    R(g, 5, 1 + hy, 9, 3 + hy, 'h');
+    R(g, 4, 4 + hy, 10, 4 + hy, 'H');
+    if (front) P(g, 7, 2 + hy, 'l');
+  } else {
+    P(g, 6, 1 + hy, 'r'); P(g, 8, 1 + hy, 'r');
+  }
+
+  // arms: sleeves at the shoulders, hands swing up / down a row
+  const arm = o.shortSleeves ? 's' : 'T';
+  const [aL, aR] = p.up ? [4, 4] : p.arms ?? [11, 11];
+  for (const [x, hand] of [[4, aL], [10, aR]] as const) {
+    const top = 9 + by;
+    if (p.up) {
+      L(g, x, top, x + (x < 7 ? -1 : 1), hand, arm);
+      P(g, x, top, 'T');
+      P(g, x + (x < 7 ? -1 : 1), hand, 's');
+      continue;
+    }
+    R(g, x, top, x, hand - 1, arm);
+    P(g, x, top, 'T');
+    P(g, x, hand, 's');
+    if (o.wristband && x === 10 && hand - 1 > top) P(g, x, hand - 1, 'x');
+    if (o.pole) L(g, x + (x < 7 ? -1 : 1), hand, x + (x < 7 ? -1 : 1), 14, 'w');
+  }
+  return outline(g);
+}
+
+/** Front / back frames for the moving animations (sitting and sleeping stay side-on). */
+function humanViews(o: Outfit, view: 'back' | 'front'): Partial<Record<Anim, string[][]>> {
+  const d = (p: ViewPose) => drawHumanView(p, o, view);
+  const walk = (lift: number, bob: number) => [
+    d({ lift: [0, 0], arms: [10, 12] }),
+    d({ bob, lift: [lift, 0], arms: [11, 11] }),
+    d({ lift: [0, 0], arms: [12, 10] }),
+    d({ bob, lift: [0, lift], arms: [11, 11] }),
+  ];
+  return {
+    idle: [d({ arms: [11, 11] }), d({ arms: [11, 11], blink: true })],
+    walk: walk(1, -1),
+    run: [
+      d({ lift: [2, 0], arms: [9, 11] }),
+      d({ bob: -1, lift: [1, 1], arms: [10, 10] }),
+      d({ lift: [0, 2], arms: [11, 9] }),
+      d({ bob: -1, lift: [1, 1], arms: [10, 10] }),
+    ],
+    climb: walk(1, 0).map((f) => f),
+    descend: walk(1, 1),
+    cheer: [d({ bob: -2, lift: [2, 2], up: true }), d({ up: true })],
+  };
+}
+
 function humanFrames(o: Outfit): Record<Anim, string[][]> {
   return {
     idle: [
@@ -521,6 +650,15 @@ export function builtInSet(id: CharacterId, gender: Gender = 'male', look: Look 
     flipped,
     lamp: id === 'hiker' ? [8, 3] : id === 'runner' ? [9, 4] : outfit?.hat === 'lamp' ? [10, 4] : outfit?.hat === 'bucket' ? [8, 3] : null,
   };
+  if (outfit) {
+    const o = { ...outfit, female };
+    const raster = (v: 'back' | 'front') => {
+      const out: Partial<Record<Anim, HTMLCanvasElement[]>> = {};
+      for (const [a, list] of Object.entries(humanViews(o, v)) as [Anim, string[][]][]) out[a] = list.map((m) => rasterise(m, keys, false));
+      return out;
+    };
+    set.views = { back: raster('back'), front: raster('front'), lampFront: o.hat === 'lamp' ? [7, 4] : o.hat === 'bucket' ? [7, 2] : null };
+  }
   builtIn.set(key, set);
   return set;
 }
@@ -593,8 +731,8 @@ export function renderSheet(set: SpriteSet, scale = 1, guides = false): HTMLCanv
 }
 
 /** Which animation to play for a given situation. */
-export function frameOf(set: SpriteSet, anim: Anim, t: number, flip: boolean): HTMLCanvasElement {
-  const list = (flip ? set.flipped : set.frames)[anim];
+export function frameOf(set: SpriteSet, anim: Anim, t: number, flip: boolean, view: View = 'side'): HTMLCanvasElement {
+  const list = (view !== 'side' && set.views?.[view][anim]) || (flip ? set.flipped : set.frames)[anim];
   const i = Math.floor(t * ANIM_INFO[anim].fps) % list.length;
   return list[i];
 }
