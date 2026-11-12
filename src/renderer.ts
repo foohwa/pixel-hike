@@ -52,6 +52,8 @@ export interface SceneData {
   bubbles: Bubble[];
   /** Hourly weather for the day (Open-Meteo) and how to use it. */
   weather: { series: WeatherSeries | null; mode: WeatherMode };
+  /** A short cut (the 15 s highlight): pop-ups only when they fit right where they belong. */
+  brief?: boolean;
 }
 
 /** Optional scenery extras (each can be switched off in the sidebar). */
@@ -361,7 +363,7 @@ export class PixelRenderer {
     for (const toast of this.toasts) {
       const last = kept[kept.length - 1];
       const t = last ? Math.max(toast.t, last.t + 2.4) : toast.t;
-      if (soft.has(toast) && t - toast.t > 1.2) continue;
+      if ((soft.has(toast) || data.brief) && t - toast.t > (data.brief ? 0.4 : 1.2)) continue;
       kept.push({ text: toast.text, t });
     }
     this.toasts = kept;

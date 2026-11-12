@@ -232,6 +232,10 @@
 
         <div class="field">
           <span>Export</span>
+          <div class="seg" id="cut">
+            <button data-v="full" class="on" title="The whole hike, as long as the Length slider says">Full video</button>
+            <button data-v="highlight" title="A 15-second cut: straight to the summit and the finish — for Stories and Reels">15 s highlight</button>
+          </div>
           <div class="row">
             <select id="quality">
               <option value="4">720p</option>
@@ -240,6 +244,7 @@
             <button id="export" class="primary" disabled>Export MP4</button>
           </div>
           <div class="row">
+            <button id="gif" class="mini" disabled title="The 15-second highlight as a looping GIF (640×360, or 360×640 in 9:16) for chats">GIF (15 s loop)</button>
             <button id="poster" class="mini" disabled title="A 1080×1350 PNG of the whole route as a pixel level-map: stats, photos, elevation profile (uses the 3D / 2D view you picked)">&#128444; Poster PNG</button>
           </div>
           <progress id="progress" max="1" value="0" hidden></progress>

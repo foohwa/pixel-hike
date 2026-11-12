@@ -22,6 +22,7 @@ import {
 } from './track';
 import { newId, PHOTO_SECONDS, pixelatePhoto, placePhoto, readPhoto, speakable, type Bubble, type Photo, type PhotoColors } from './moments';
 import { drawPoster, upscale } from './poster';
+import { exportGif } from './gif';
 import { loadWeather, weatherSummary, type WeatherMode, type WeatherSeries } from './weather';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
@@ -99,6 +100,8 @@ const ui = {
   bubbles: $('bubbles'),
   quality: $<HTMLSelectElement>('quality'),
   poster: $<HTMLButtonElement>('poster'),
+  gif: $<HTMLButtonElement>('gif'),
+  cut: $('cut'),
   export: $<HTMLButtonElement>('export'),
   progress: $<HTMLProgressElement>('progress'),
   download: $<HTMLAnchorElement>('download'),
@@ -143,6 +146,8 @@ const state = {
   weatherLoad: null as Promise<void> | null,
   soundtrack: null as AudioBuffer | null,
   soundtrackKey: '',
+  /** Full video, or the 15-second highlight cut (previewed and exported as such). */
+  cut: 'full' as 'full' | 'highlight',
   t: 0,
   playing: true,
   exporting: false,
@@ -227,7 +232,7 @@ async function loadParsed(parsed: ParsedTrack) {
   rebuild();
   state.t = 0;
   state.playing = true;
-  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble, ui.poster].forEach((el) => (el.disabled = false));
+  [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble, ui.poster, ui.gif].forEach((el) => (el.disabled = false));
   renderMoments();
   void refreshPhotoArt();
   ui.play.innerHTML = '&#9208;';
@@ -332,11 +337,16 @@ function rebuild() {
   ui.zoneRows.classList.toggle('off', !ui.zonesOn.checked);
   ui.zoneState.textContent = ui.zonesOn.checked ? 'on' : 'off';
   renderZoneSummary();
-  state.timeline = new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate, photos: photoStops() });
+  const highlight = state.cut === 'highlight';
+  const cps = highlight ? highlightCheckpoints(state.checkpoints) : state.checkpoints;
+  state.timeline = highlight
+    ? new Timeline(state.track, cps, HIGHLIGHT_SECONDS, { intro: 1.8, outro: 2.8 })
+    : new Timeline(state.track, state.checkpoints, Number(ui.duration.value), { gates: !!gate, photos: photoStops() });
+  ui.duration.disabled = highlight;
   renderer.setData({
     track: state.track,
     terrain: state.terrain,
-    checkpoints: state.checkpoints,
+    checkpoints: cps,
     timeline: state.timeline,
     title: ui.title.value || 'My Hike',
     tzOffsetMin: Number(ui.tz.value || 0),
@@ -346,12 +356,13 @@ function rebuild() {
     logo: state.logoSet
       ? { set: state.logoSet, intro: ui.logoIntro.checked, badge: ui.logoBadge.checked, outro: ui.logoOutro.checked }
       : null,
-    gate,
+    gate: highlight ? null : gate,
     zones: state.zones,
     water: state.water,
     weather: { series: state.weather, mode: ui.weather.value as WeatherMode },
-    photos: shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, caption: p.caption, art: state.photoArt.get(p.id)! })),
-    bubbles: state.bubbles,
+    photos: highlight ? [] : shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, caption: p.caption, art: state.photoArt.get(p.id)! })),
+    bubbles: highlight ? [] : state.bubbles,
+    brief: highlight,
     env: {
       scenery,
       clouds: ui.envClouds.checked,
@@ -366,7 +377,7 @@ function rebuild() {
     },
   });
   state.t = Math.min(state.t, state.timeline.duration);
-  ui.durLabel.textContent = `${ui.duration.value}s`;
+  ui.durLabel.textContent = `${state.timeline.duration}s${highlight ? ' (highlight)' : ''}`;
   const x = state.timeline.speedup();
   ui.speedLabel.textContent = x ? `· walking ≈ ${x >= 100 ? Math.round(x / 10) * 10 : Math.round(x)}× real speed` : '';
   lastHereIdx = -2;
@@ -1345,6 +1356,53 @@ for (const el of [ui.drop, ui.screen]) {
   });
 }
 
+const HIGHLIGHT_SECONDS = 15;
+
+/** For the highlight: only the top summit (or highest peak) and the finish stop the walker. */
+function highlightCheckpoints(all: Checkpoint[]): Checkpoint[] {
+  const tops = all.filter((c) => c.enabled && (c.kind === 'summit' || c.kind === 'peak'));
+  const top = tops.find((c) => c.kind === 'summit') ?? tops.sort((a, b) => b.ele - a.ele)[0];
+  return all.map((c) => ({ ...c, enabled: c.enabled && (c.kind === 'start' || c.kind === 'finish' || c === top) }));
+}
+
+function setCut(cut: 'full' | 'highlight') {
+  state.cut = cut;
+  setSeg(ui.cut, cut);
+  rebuild();
+  state.t = 0;
+  void updateSoundtrack().then(syncAudio);
+}
+bindSeg(ui.cut, (v) => setCut(v as 'full' | 'highlight'));
+
+ui.gif.onclick = async () => {
+  if (!state.timeline || state.exporting) return;
+  const was = state.cut;
+  if (was !== 'highlight') setCut('highlight');
+  state.exporting = true;
+  syncAudio();
+  exportAbort = new AbortController();
+  ui.progress.hidden = false;
+  ui.gif.textContent = 'Making GIF…';
+  try {
+    const blob = await exportGif(renderer, { duration: state.timeline.duration, fps: 12.5, scale: 2, onProgress: (u) => (ui.progress.value = u), signal: exportAbort.signal });
+    const url = URL.createObjectURL(blob);
+    const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel.gif`;
+    ui.download.href = url;
+    ui.download.download = name;
+    ui.download.textContent = `Download ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
+    ui.download.hidden = false;
+    ui.download.click();
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') setStatus(`GIF failed: ${(e as Error).message}`, true);
+  } finally {
+    state.exporting = false;
+    ui.progress.hidden = true;
+    ui.gif.textContent = 'GIF (15 s loop)';
+    if (was !== 'highlight') setCut(was);
+    syncAudio();
+  }
+};
+
 /** Builds the poster (216×270 game px, ×5). */
 async function makePoster() {
   if (!state.track) return null;
@@ -1397,7 +1455,7 @@ ui.export.onclick = async () => {
       audio: state.soundtrack,
     });
     const url = URL.createObjectURL(blob);
-    const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel-${renderer.mode}.mp4`;
+    const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel-${renderer.mode}${state.cut === 'highlight' ? '-15s' : ''}.mp4`;
     ui.download.href = url;
     ui.download.download = name;
     ui.download.textContent = `Download ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
@@ -1472,6 +1530,16 @@ Object.assign(window, {
     setCompanion(c: CharacterId | null) { state.companion = c; ui.companion.value = c ?? ''; rebuild(); },
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
+    },
+    setCut,
+    gif: async (scale = 2) => {
+      setCut('highlight');
+      state.exporting = true;
+      try {
+        return await exportGif(renderer, { duration: state.timeline!.duration, fps: 12.5, scale });
+      } finally {
+        state.exporting = false;
+      }
     },
     posterDataUrl: async () => (await makePoster())?.toDataURL('image/png'),
     weatherReady() { return ensureWeather().then(() => state.weather && { hours: state.weather.precip.length, summary: ui.weatherInfo.textContent }); },
