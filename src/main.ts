@@ -114,7 +114,37 @@ const ui = {
   stats: $('stats'),
 };
 
-const renderer = new PixelRenderer(ui.canvas);
+const renderer = createRenderer();
+
+/**
+ * The WebGL renderer, or a clear message when the browser won't give us one. Chrome turns WebGL off
+ * for a site (until it's restarted) after the graphics card resets under that site a few times.
+ */
+function createRenderer() {
+  try {
+    return new PixelRenderer(ui.canvas);
+  } catch (e) {
+    ui.status.textContent =
+      'This browser has switched off 3D graphics for this page (usually after the graphics card was reset). ' +
+      'Quit the browser completely (all windows) and open it again.';
+    ui.status.classList.add('error');
+    throw e;
+  }
+}
+
+// the graphics card reset under us: three.js restores the context by itself, just say what's going on
+ui.canvas.addEventListener('webglcontextlost', () => {
+  ui.status.textContent = 'The graphics card was reset — waiting for it to come back…';
+  ui.status.classList.remove('error');
+});
+ui.canvas.addEventListener('webglcontextrestored', () => {
+  ui.status.textContent = '';
+  needsRender = true;
+});
+
+/** Paused and nothing changed? Then the preview isn't redrawn every frame (saves the GPU). */
+let needsRender = true;
+let lastDraw = 0;
 const player = new PreviewPlayer();
 
 const state = {
@@ -381,6 +411,7 @@ function rebuild() {
   const x = state.timeline.speedup();
   ui.speedLabel.textContent = x ? `· walking ≈ ${x >= 100 ? Math.round(x / 10) * 10 : Math.round(x)}× real speed` : '';
   lastHereIdx = -2;
+  needsRender = true;
   persist();
 }
 
@@ -1132,11 +1163,12 @@ function download(url: string, name: string) {
 
 function seek(t: number) {
   state.t = t;
+  needsRender = true;
   syncAudio();
 }
 
-bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); persist(); });
-bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); ui.screen.classList.toggle('tall', v === 'portrait'); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
+bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); needsRender = true; persist(); });
+bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); needsRender = true; ui.screen.classList.toggle('tall', v === 'portrait'); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
 bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
@@ -1144,7 +1176,7 @@ ui.companion.onchange = () => { state.companion = (ui.companion.value || null) a
 ui.duration.oninput = () => { rebuild(); updateSoundtrackSoon(); };
 ui.title.oninput = () => rebuild();
 ui.tz.onchange = () => rebuild();
-ui.minimap.onchange = () => { renderer.showMinimap = ui.minimap.checked; persist(); };
+ui.minimap.onchange = () => { renderer.showMinimap = ui.minimap.checked; needsRender = true; persist(); };
 ui.music.onchange = () => { void updateSoundtrack(); persist(); };
 ui.volume.oninput = () => { updateSoundtrackSoon(); persist(); };
 ui.musicFile.onchange = async () => {
@@ -1340,6 +1372,7 @@ ui.play.onclick = () => {
 };
 ui.scrub.oninput = () => {
   if (!state.timeline) return;
+  needsRender = true;
   state.t = (Number(ui.scrub.value) / 1000) * state.timeline.duration;
 };
 ui.scrub.onpointerdown = () => { state.scrubbing = true; syncAudio(); };
@@ -1492,7 +1525,12 @@ function frame(now: number) {
         syncAudio();
       }
     }
-    renderer.renderAt(state.t);
+    // while paused, only redraw when something changed (or twice a second, to catch anything else)
+    if (state.playing || state.scrubbing || needsRender || now - lastDraw > 500) {
+      renderer.renderAt(state.t);
+      needsRender = false;
+      lastDraw = now;
+    }
     ui.scrub.value = String(Math.round((Math.min(state.t, state.timeline.duration) / state.timeline.duration) * 1000));
     ui.clock.textContent = `${Math.min(state.t, state.timeline.duration).toFixed(1)}s / ${state.timeline.duration}s`;
     if (now - lastHere > 100) { updateHere(); lastHere = now; }
