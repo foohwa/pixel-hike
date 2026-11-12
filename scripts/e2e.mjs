@@ -58,6 +58,8 @@ const restored = await names();
 console.log('after reload:', restored.join(', '));
 ok(restored.includes('WATERFALL') && !restored.includes('PEAK 2') && restored.includes('VIEWPOINT'), 'edits restored after reload');
 ok(await page.$eval('#activity button.on', (b) => b.dataset.v) === 'trailrun', 'activity restored (trail run)');
+// the note appears after a short save debounce (and the map arriving re-arms it): wait for it
+await page.waitForFunction(() => document.querySelector('#saved').textContent.includes('restored'), null, { timeout: 3000 }).catch(() => {});
 ok((await page.textContent('#saved')).includes('restored'), 'restored indicator shown');
 
 step('4. you-are-here');

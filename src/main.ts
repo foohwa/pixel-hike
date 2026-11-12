@@ -13,7 +13,7 @@ import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
 import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
 import type { BBox, Dem } from './dem';
-import { loadWater, routeSurface, type SurfaceInfo, type WaterData } from './water';
+import { loadWater, mapAreaKey, routeSurface, type SurfaceInfo, type WaterData } from './water';
 import { findViews, namePeaks, openness, viewCheckpoints } from './landmarks';
 import { defaultDuration, Timeline } from './timeline';
 import {
@@ -202,6 +202,7 @@ async function loadParsed(parsed: ParsedTrack) {
   [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps].forEach((el) => (el.disabled = false));
   ui.play.innerHTML = '&#9208;';
   justRestored = !!saved;
+  restoredAt = saved ? performance.now() : -Infinity;
   setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
   if (!dem) setTimeout(() => setStatus(''), 3000);
   void updateSoundtrack().then(syncAudio);
@@ -453,6 +454,7 @@ buildLookEditor();
 
 let persistTimer = 0;
 let justRestored = false;
+let restoredAt = -Infinity;
 function persist() {
   if (!state.track || state.restoring) return;
   clearTimeout(persistTimer);
@@ -461,7 +463,8 @@ function persist() {
     const ok = save(state.track, currentSaveState());
     mirrorToDisk(state.track);
     const edits = state.checkpoints.filter((c) => c.pinned).length + state.tombstones.length;
-    const verb = justRestored ? 'restored' : 'saved';
+    // automatic re-saves right after opening (e.g. the map arriving) still count as "restored"
+    const verb = justRestored || performance.now() - restoredAt < 4000 ? 'restored' : 'saved';
     justRestored = false;
     showSaved(ok ? (edits ? `✓ ${verb} · ${edits} edit${edits > 1 ? 's' : ''}` : `✓ ${verb}`) : 'not saved (storage full?)');
   }, 250);
@@ -923,7 +926,13 @@ function ensureWater(): Promise<void> {
   if (state.water) return Promise.resolve();
   if (state.waterLoad) return state.waterLoad;
   const track = state.track;
-  state.waterLoad = loadWater(state.bbox)
+  const t0 = performance.now();
+  mapStatus('Loading map…');
+  state.waterLoad = loadWater(state.bbox, {
+    onProgress: (done, total) => { if (state.track === track) mapStatus(`Loading map… ${done}/${total}`); },
+    // springs + waterfalls come from a separate small query and may land a bit later
+    onExtras: (w) => { if (state.track === track && state.water === w) { refreshCheckpoints(); rebuild(); } },
+  })
     .then((w) => {
       if (state.track !== track) return; // another file was loaded meanwhile
       state.water = w;
@@ -931,12 +940,24 @@ function ensureWater(): Promise<void> {
       renderStats();
       refreshCheckpoints(); // OSM viewpoints + peak names
       rebuild();
+      mapStatus(`Map ready (${((performance.now() - t0) / 1000).toFixed(1)} s)`, 1500);
     })
     .catch((e) => {
-      console.warn('Rivers unavailable (OpenStreetMap / Overpass)', e);
+      console.warn('Map data unavailable (OpenStreetMap)', e);
       state.waterLoad = null;
+      if (state.track === track) mapStatus('Map data unavailable right now — the video works without rivers and roads.', 5000);
     });
   return state.waterLoad;
+}
+
+/** Map messages only use the status line when nothing else is showing there. */
+let mapMsgTimer = 0;
+function mapStatus(msg: string, clearAfter = 0) {
+  const cur = ui.status.textContent ?? '';
+  if (cur && !cur.startsWith('Loading map') && !cur.startsWith('Map ')) return;
+  setStatus(msg);
+  clearTimeout(mapMsgTimer);
+  if (clearAfter) mapMsgTimer = window.setTimeout(() => { if (ui.status.textContent === msg) setStatus(''); }, clearAfter);
 }
 for (const el of [ui.zonesOn, ui.zoneTech, ui.zoneLabels, ...ui.zoneStyle, ui.zoneAt1, ui.zoneAt2]) el.onchange = () => rebuild();
 ui.zoneReset.onclick = () => {
@@ -1163,7 +1184,9 @@ Object.assign(window, {
     setGate(mode: string, text = '', tagline = '', color = 'red') {
       ui.gateMode.value = mode; ui.gateText.value = text; ui.gateTagline.value = tagline; ui.gateColor.value = color; rebuild();
     },
-    waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length, surface: state.surface }); },
+    waterReady() { return ensureWater().then(() => state.water && { lines: state.water.lines.length, areas: state.water.areas.length, pois: state.water.pois.length, extras: !!state.water.extras, surface: state.surface }); },
+    /** For scripts/bake-map.mjs: the loaded map data and the area key it's cached under. */
+    mapData() { return ensureWater().then(() => state.bbox && state.water && { area: mapAreaKey(state.bbox), data: state.water }); },
     async setLogoFromUrl(url: string, colors: LogoColors = 'logo') {
       ui.logoColors.value = colors;
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));

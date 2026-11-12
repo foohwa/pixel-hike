@@ -13,7 +13,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **Clouds & mist** — mist pools in the valleys around sunrise (trees poke through it, cleared around you) and burns off by mid-morning; drifting cloud shadows by day; pixel clouds above the horizon.
 - **Fireflies & birds** — fireflies on low jungle nights, a flock crossing around sunrise/sunset, and the head-lamp throws a beam ahead instead of a round pool.
 - **Real sun & moon light** — ridges cast shadows along the real sun direction (ray-marched over a height map, works in 3D and 2D): valleys stay in the range's shadow after sunrise while high ridges catch first light, and low evening sun throws long shadows. At night the light comes from the real moon's position, as bright as its phase; starlight only when it's down.
-- **Rivers, lakes & roads** — rivers, streams, lakes, reservoirs, roads and dirt tracks from OpenStreetMap (fetched once per area from the public Overpass API and cached in the browser), draped on the terrain with the canopy cleared along their banks; a pop-up names each river you cross (each name at most once per 15 km). The route is split into trail / tar road / dirt track (shown under the preview); local roads without a surface tag count as tar. Data © OpenStreetMap contributors (ODbL).
+- **Rivers, lakes & roads** — rivers, streams, lakes, reservoirs, roads and dirt tracks from OpenStreetMap (downloaded once per area as pre-cut vector tiles from OpenFreeMap — a few seconds — and kept in the browser's IndexedDB, so reopening a route needs no network; springs and waterfalls, which the tiles leave out, come from a small Overpass query in the background, and the full Overpass query is the fallback if the tile server is down), draped on the terrain with the canopy cleared along their banks; a pop-up names each river you cross (each name at most once per 15 km). The route is split into trail / tar road / dirt track (shown under the preview); local roads without a surface tag count as tar. Terrain tiles are cached the same way. `node scripts/bake-map.mjs` saves the sample route's map next to the private sample (`public/samples/map-<area>.json`, git-ignored) so the dev server opens it instantly and offline. Data © OpenStreetMap contributors (ODbL).
 - **River & road look** — rivers get a real-width water surface with lighter banks and glints drifting downstream (moonlight on the water on bright nights); main roads are a dark band with a dashed centre line, dirt tracks are dotted, and residential lanes are only drawn near the route so towns don't turn into a grey scribble. Little bridges where the route crosses water on a road, cars and motorbikes on nearby roads (headlights at night), street lights along main roads and town streets at night, and white water on steep streams.
 - **Viewpoints & landmarks** — OpenStreetMap viewpoints beside the trail (plus the most open high ground the terrain finder can spot) become *Viewpoint* checkpoints: the walker stops, the banner slides away and the camera swings round towards the view. Summits and rest stops take the names mapped there (GUNUNG KORBU, KEM BALAK); camps get a little sign and a pop-up, springs a water drop, and waterfalls are drawn on the map (with a "1.5 KM AWAY" pop-up for one just off the route). Switch it off under *Checkpoints*.
 - **Summit signs & aid tents** — a signboard with the name and height next to you at summits/peaks (the banner just shouts SUMMIT!), and a striped aid tent with a volunteer and water at race checkpoints.
@@ -53,7 +53,10 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/timeline.ts` | Maps video seconds → distance + clock; intro/outro, pauses (time-lapsed stays), slower on steep/slow parts |
 | `src/sky.ts` | Sun & moon position, moon phase, sunrise/sunset search, sky colour ramps |
 | `src/characters.ts` | The sprite standard, code-drawn Hiker/Runner/Dog/Cat, PNG sheet loader |
-| `src/dem.ts` | Fetches Terrarium elevation tiles and samples them |
+| `src/dem.ts` | Fetches Terrarium elevation tiles (cached in IndexedDB) and samples them |
+| `src/water.ts` | Map data loading order (cache → baked sample → tiles → Overpass), rivers/lakes/roads in 3D, route surface split |
+| `src/osmtiles.ts` | OpenFreeMap vector tiles: protobuf decoding, clipping to tile edges, rejoining rivers/roads cut at edges, lake pieces grouped to one water level |
+| `src/cache.ts` | Small IndexedDB key/value store for map data and terrain tiles |
 | `src/terrain.ts` | Height grid → mesh, diorama soil skirt, instanced trees, toon + headlamp shader |
 | `src/renderer.ts` | Camera rig (look-ahead follow cam that lifts over ridges), trail lines, low-res render + palette/dither post pass |
 | `src/overlay.ts` | Pixel-perfect sprites (hiker, flags, tents, confetti) and HUD, drawn on a 2D canvas |
@@ -78,10 +81,13 @@ In the app: **Template PNG** downloads the current character's sheet to paint ov
 - `node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale] [seconds]` — export in headless Chrome (use `BASE=` a `vite preview` URL so hot-reload can't interrupt it).
 - `node scripts/e2e.mjs [outdir]` — end-to-end check: checkpoint edits survive activity switches and reloads, you-are-here row, MP4 with audio.
 - `node scripts/sheets.mjs` — regenerate `docs/sprites/*.png` from the built-in characters.
+- `node scripts/bake-map.mjs` — save the sample route's map data to `public/samples/map-<area>.json` (git-ignored) so the dev server opens it instantly and offline.
 - `node scripts/gpx-to-fit.mjs in.gpx out.fit` — make a FIT test file from a GPX (adds synthetic temperature/totals; test data only).
 
 The browser scripts use the machine's GPU (`scripts/browser.mjs`). On a machine without one (CI), set `SWIFTSHADER=1` for software WebGL — it works, but is ~90× slower (the e2e takes ~7 min instead of ~13 s).
 
 Music: "Chiptune Adventures" by Juhani Junkala, CC0 ([OpenGameArt](https://opengameart.org/content/4-chiptunes-adventure)).
+
+Map tiles: [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data, OpenMapTiles schema).
 
 Elevation data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen; SRTM, GMTED, NED, ETOPO1 and others).

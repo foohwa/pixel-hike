@@ -2,6 +2,8 @@
  * Elevation from the free AWS "Terrain Tiles" (Terrarium encoding).
  * https://registry.opendata.aws/terrain-tiles/
  */
+import { cacheGet, cacheSet } from './cache';
+
 const TILE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const MAX_TILES = 30;
 
@@ -23,6 +25,17 @@ function lonToX(lon: number, z: number) {
 function latToY(lat: number, z: number) {
   const r = (lat * Math.PI) / 180;
   return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z;
+}
+
+/** Terrain tiles never change: keep them in this browser so a route opened before loads offline. */
+async function tileBlob(url: string): Promise<Blob> {
+  const hit = await cacheGet<Blob>(url);
+  if (hit) return hit;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Elevation tile ${r.status}`);
+  const b = await r.blob();
+  void cacheSet(url, b);
+  return b;
 }
 
 export async function loadDem(bbox: BBox, onProgress?: (done: number, total: number) => void): Promise<Dem> {
@@ -51,11 +64,7 @@ export async function loadDem(bbox: BBox, onProgress?: (done: number, total: num
     for (let tx = tx0; tx <= tx1; tx++) {
       const url = TILE_URL.replace('{z}', String(z)).replace('{x}', String(tx)).replace('{y}', String(ty));
       jobs.push(
-        fetch(url)
-          .then((r) => {
-            if (!r.ok) throw new Error(`Elevation tile ${r.status}`);
-            return r.blob();
-          })
+        tileBlob(url)
           .then((b) => createImageBitmap(b))
           .then((img) => {
             ctx.drawImage(img, (tx - tx0) * 256, (ty - ty0) * 256);

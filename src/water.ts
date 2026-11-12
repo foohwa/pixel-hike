@@ -2,15 +2,23 @@ import * as THREE from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { cacheGet, cacheSet } from './cache';
 import type { BBox } from './dem';
+import { loadTiles } from './osmtiles';
 import { C, rgb01 } from './palette';
 import { LIGHT_GLSL, litMaterial, shared, type Terrain } from './terrain';
 import type { Track } from './track';
 
 /**
  * Rivers, streams, lakes, roads and a few landmarks (waterfalls, viewpoints, peaks, camps, springs)
- * from OpenStreetMap (© OpenStreetMap contributors, ODbL), fetched from the public Overpass API for
- * the diorama's area only, and cached in the browser per area.
+ * from OpenStreetMap (© OpenStreetMap contributors, ODbL) for the diorama's area only.
+ *
+ * Where it comes from, fastest first:
+ *  1. this browser's cache (IndexedDB) — a route opened before needs no network;
+ *  2. a baked copy next to the private sample (public/samples/map-<area>.json, dev only);
+ *  3. pre-cut vector tiles (osmtiles.ts) — a second or two — plus a tiny Overpass query for the
+ *     springs and waterfalls the tiles leave out (in the background, never blocking);
+ *  4. the full live Overpass query, if the tile server is down.
  */
 
 /**
@@ -20,10 +28,12 @@ import type { Track } from './track';
 export type LineKind = 'river' | 'stream' | 'canal' | 'road' | 'minor' | 'street' | 'track';
 /** `w` = width in metres when OSM knows it. */
 export interface WaterLine { name: string; kind: LineKind; pts: [number, number][]; w?: number } // [lat, lon]
-export interface WaterArea { name: string; ring: [number, number][] }
+/** `group`: pieces of one lake cut at tile edges share it, so they get one water level. */
+export interface WaterArea { name: string; ring: [number, number][]; group?: string }
 export type PoiKind = 'waterfall' | 'viewpoint' | 'peak' | 'camp' | 'spring';
 export interface Poi { kind: PoiKind; name: string; lat: number; lon: number; ele?: number }
-export interface WaterData { lines: WaterLine[]; areas: WaterArea[]; pois: Poi[] }
+/** `extras`: false while springs/waterfalls (not in the tiles) are still to be fetched. */
+export interface WaterData { lines: WaterLine[]; areas: WaterArea[]; pois: Poi[]; extras?: boolean }
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -33,13 +43,98 @@ const ENDPOINTS = [
 
 const r5 = (v: number) => Math.round(v * 1e5) / 1e5;
 
-export async function loadWater(b: BBox): Promise<WaterData> {
-  const key = `pixelhike:water:v3:${[b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join(',')}`;
-  try {
-    const hit = localStorage.getItem(key);
-    if (hit) return JSON.parse(hit) as WaterData;
-  } catch { /* storage unavailable */ }
+export const mapAreaKey = (b: BBox) => [b.minLat, b.minLon, b.maxLat, b.maxLon].map((v) => v.toFixed(3)).join('_');
 
+export interface LoadOptions {
+  onProgress?: (done: number, total: number) => void;
+  /** Called later if springs/waterfalls arrive after the map was already returned. */
+  onExtras?: (data: WaterData) => void;
+}
+
+export async function loadWater(b: BBox, opts: LoadOptions = {}): Promise<WaterData> {
+  dropOldCache();
+  const area = mapAreaKey(b);
+  const key = `pixelhike:map:v4:${area}`;
+
+  let data = (await cacheGet<WaterData>(key)) ?? (await baked(area));
+  if (data) {
+    if (!data.extras) void addExtras(b, data, key, opts);
+    else void cacheSet(key, data);
+    return data;
+  }
+
+  let tiles: WaterData | null = null;
+  const extras = fetchExtras(b); // in parallel with the tiles
+  try {
+    tiles = await loadTiles(b, opts.onProgress);
+  } catch (e) {
+    console.warn('Map tiles unavailable, asking Overpass instead', e);
+  }
+  if (!tiles) {
+    data = await loadOverpass(b);
+    void cacheSet(key, data);
+    return data;
+  }
+  // springs/waterfalls usually land at about the same time; don't hold the map back for long
+  const quick = await Promise.race([extras, new Promise<null>((r) => setTimeout(() => r(null), 2500))]);
+  data = { ...tiles, extras: false };
+  if (quick) mergeExtras(data, quick);
+  else void addExtras(b, data, key, opts, extras);
+  void cacheSet(key, data);
+  return data;
+}
+
+async function baked(area: string): Promise<WaterData | undefined> {
+  if (!import.meta.env.DEV) return undefined;
+  try {
+    const r = await fetch(`/samples/map-${area}.json`);
+    if (!r.ok || !(r.headers.get('content-type') ?? '').includes('json')) return undefined;
+    return (await r.json()) as WaterData;
+  } catch {
+    return undefined;
+  }
+}
+
+function dropOldCache() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('pixelhike:water:')) localStorage.removeItem(k); // moved to IndexedDB
+    }
+  } catch { /* storage unavailable */ }
+}
+
+async function addExtras(b: BBox, data: WaterData, key: string, opts: LoadOptions, pending = fetchExtras(b)) {
+  const pois = await pending;
+  if (!pois) return; // try again next time the route is opened
+  mergeExtras(data, pois);
+  void cacheSet(key, data);
+  opts.onExtras?.(data);
+}
+
+function mergeExtras(data: WaterData, pois: Poi[]) {
+  for (const p of pois) {
+    const dup = data.pois.some((q) => q.kind === p.kind && Math.abs(q.lat - p.lat) < 5e-4 && Math.abs(q.lon - p.lon) < 5e-4);
+    if (!dup) data.pois.push(p);
+  }
+  data.extras = true;
+}
+
+/** Springs and waterfalls: the vector tiles don't carry them. A points-only query — light and quick. */
+async function fetchExtras(b: BBox): Promise<Poi[] | null> {
+  const bb = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
+  const query = `[out:json][timeout:20];(node["waterway"="waterfall"](${bb});node["natural"~"^(spring|waterfall)$"](${bb}););out;`;
+  for (const url of ENDPOINTS) {
+    try {
+      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: AbortSignal.timeout(25_000) });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return parse((await res.json()) as OverpassResult).pois;
+    } catch { /* next server */ }
+  }
+  return null;
+}
+
+async function loadOverpass(b: BBox): Promise<WaterData> {
   const bb = `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`;
   const query = `[out:json][timeout:60];(` +
     `way["waterway"~"^(river|stream|canal)$"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});` +
@@ -63,13 +158,7 @@ export async function loadWater(b: BBox): Promise<WaterData> {
     if (!json) await new Promise((r) => setTimeout(r, 4000 * (attempt + 1)));
   }
   if (!json) throw lastErr ?? new Error('Overpass unavailable');
-
-  const data = parse(json);
-  try {
-    const s = JSON.stringify(data);
-    if (s.length < 3_000_000) localStorage.setItem(key, s);
-  } catch { /* full — fine, just not cached */ }
-  return data;
+  return { ...parse(json), extras: true };
 }
 
 interface OsmPoint { lat: number; lon: number }
@@ -330,6 +419,16 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
 
   // lakes / reservoirs: flat lit surfaces at the lowest shore height
   const lake = litMaterial(C.sky);
+  const level = new Map<string, number>(); // one level per lake, even when it came in tile-sized pieces
+  for (const a of data.areas) {
+    if (!a.group) continue;
+    let y = level.get(a.group) ?? Infinity;
+    for (const [la, lo] of a.ring) {
+      const [x, z] = toXZ(la, lo);
+      if (inside(x, z)) y = Math.min(y, terrain.worldY(x, z));
+    }
+    level.set(a.group, y);
+  }
   for (const a of data.areas) {
     const ring = a.ring.map(([la, lo]) => toXZ(la, lo));
     if (!ring.some(([x, z]) => inside(x, z))) continue;
@@ -337,13 +436,13 @@ export function buildWater(data: WaterData, track: Track, terrain: Terrain, W: n
       const [x2, z2] = ring[(i + 1) % ring.length];
       return acc + x * z2 - x2 * z;
     }, 0)) / 2;
-    if (area < s * s * 0.5) continue; // too small to see
+    if (area < s * s * 0.5 && !a.group) continue; // too small to see
     const contour = ring.map(([x, z]) => new THREE.Vector2(x, z));
     if (contour.length > 2 && contour[0].equals(contour[contour.length - 1])) contour.pop();
     let tris: number[][];
     try { tris = THREE.ShapeUtils.triangulateShape(contour, []); } catch { continue; }
-    let y = Infinity;
-    for (const [x, z] of ring) y = Math.min(y, terrain.worldY(x, z));
+    let y = a.group ? level.get(a.group)! : Infinity;
+    if (!Number.isFinite(y)) for (const [x, z] of ring) y = Math.min(y, terrain.worldY(x, z));
     const pos: number[] = [];
     for (const t of tris) for (const i of t) pos.push(contour[i].x, y + lift * 0.5, contour[i].y);
     const g = new THREE.BufferGeometry();
