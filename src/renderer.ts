@@ -18,6 +18,7 @@ import { buildWater, type WaterData, type WaterScene } from './water';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 import { effortAt } from './effort';
 import { photoCaption, scheduleBubbles, type Bubble, type PhotoArt } from './moments';
+import { airSprites, groundPose, planWildlife, regionOf, type Encounter, type WildSprite } from './wildlife';
 import { weatherAt, weatherEvents, type WeatherMode, type WeatherNow, type WeatherSeries } from './weather';
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
@@ -72,6 +73,8 @@ export interface EnvOptions {
   landmarks: boolean;
   /** The walker flashes / sweats / puffs when the heart rate is high. */
   effort: boolean;
+  /** Local animals beside the trail and in the sky. */
+  wildlife: boolean;
 }
 
 interface Rig {
@@ -117,6 +120,9 @@ export class PixelRenderer {
   private sunEvents: SunEvent[] = [];
   private toasts: { text: string; t: number }[] = [];
   private bubbleTimes: { text: string; t: number }[] = [];
+  /** Animal encounters along the trail; flying ones with the video time they cross. */
+  private wild: Encounter[] = [];
+  private wildAir: { e: Encounter; t: number }[] = [];
   /** Compass direction of the best outlook at each viewpoint checkpoint (cached per checkpoint). */
   private viewDir = new Map<string, number>();
   /** Map sprites seen last frame → video time each came into view (for fading in), and that frame's time. */
@@ -297,6 +303,17 @@ export class PixelRenderer {
     }
     const t0 = data.timeline.gateIn + data.timeline.intro;
     const soft = new Set<{ text: string; t: number }>();
+    this.wild = data.env.wildlife ? planWildlife(data.track, regionOf(data.track, data.env.scenery === 'alpine'), data.checkpoints) : [];
+    this.wildAir = [];
+    for (const e of this.wild) {
+      const ground = e.species.kind === 'ground';
+      const t = data.timeline.videoTimeAtDistance(Math.max(0, e.d - (ground ? 120 : 0)));
+      if (t == null || t < t0) continue;
+      if (!ground) this.wildAir.push({ e, t });
+      const toast = { text: `${e.species.name}!`, t };
+      this.toasts.push(toast);
+      soft.add(toast);
+    }
     for (const ev of weatherEvents(data.weather.series, data.weather.mode, data.track.stats.startTime, data.track.stats.endTime)) {
       const t = data.timeline.videoTimeAtClock(ev.ms);
       if (t != null && t >= t0) this.toasts.push({ text: ev.text, t });
@@ -715,6 +732,9 @@ export class PixelRenderer {
     }
 
     const decor = this.decorFrame(st, hiker);
+    const wild = env.wildlife && (st.phase === 'move' || st.phase === 'pause')
+      ? { ground: this.wildGround(st), air: airSprites(this.wildAir, st.t, this.W, this.H, hiker) }
+      : null;
     const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
     drawOverlay({
@@ -751,6 +771,7 @@ export class PixelRenderer {
       effort,
       heroT,
       weather,
+      wild,
       weatherElevation: this.data.weather.series?.elevation ?? null,
       skyH: is2d ? 0 : Math.round(this.H * 0.38),
       bubbles: this.bubbleTimes,
@@ -783,6 +804,38 @@ export class PixelRenderer {
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);
+  }
+
+  /** Animals sitting beside the trail near the walker, on screen (and dashing off as you pass). */
+  private wildGround(st: TimelineState): WildSprite[] {
+    const { track, terrain } = this.data!;
+    const r = this.rig!;
+    const is2d = this.mode === '2d';
+    const cam = this.camera.position;
+    const out: WildSprite[] = [];
+    for (const e of this.wild) {
+      if (e.species.kind !== 'ground') continue;
+      const rel = st.d - e.d;
+      if (rel < -r.camDist * 2.6 || rel > 400) continue;
+      const hx = sampleAt(track, track.hdx, e.d), hz = sampleAt(track, track.hdz, e.d);
+      const at = (k: number) => {
+        const x = sampleAt(track, track.x, e.d) - hz * e.side * k, z = sampleAt(track, track.z, e.d) + hx * e.side * k;
+        return { x, y: terrain.worldY(x, z), z };
+      };
+      const w = at(r.camDist * 0.045);
+      const p = this.projectF(w.x, w.y, w.z);
+      if (!p.visible || p.x < -10 || p.x > this.W + 10 || p.y < -10 || p.y > this.H + 10) continue;
+      const q = is2d ? 1 : Math.hypot(w.x - cam.x, w.y - cam.y, w.z - cam.z) / r.camDist;
+      if (q > 2.4 || (!is2d && this.occluded(w.x, w.y, w.z))) continue;
+      const w2 = at(r.camDist * 0.2);
+      const p2 = this.projectF(w2.x, w2.y, w2.z);
+      let ox = p2.x - p.x, oy = p2.y - p.y;
+      const l = Math.hypot(ox, oy) || 1;
+      ox /= l; oy /= l;
+      const pose = groundPose(e, rel, st.t, { x: p.x, y: p.y }, { x: ox, y: oy }, 1 / Math.max(0.75, q));
+      if (pose) out.push(pose);
+    }
+    return out.sort((a, b) => a.y - b.y);
   }
 
   /** The polaroid to show while stopped for a photo. */

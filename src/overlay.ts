@@ -12,6 +12,7 @@ import type { EnvOptions } from './renderer';
 import { drawEffortFx, tintFrame, type EffortFx } from './effort';
 import { drawBubble, drawPolaroid, type PhotoArt } from './moments';
 import { drawWeather, RAIN_ICON, STORM_ICON, type WeatherNow } from './weather';
+import type { WildSprite } from './wildlife';
 
 export interface ScreenPoint { x: number; y: number; visible: boolean }
 
@@ -97,6 +98,8 @@ export interface OverlayInput {
   /** Stopped for one of your photos: the polaroid, its caption and how far through (0..1). */
   photo: { art: PhotoArt; caption: string; u: number } | null;
   weather: WeatherNow;
+  /** Animals this frame: beside the trail (ground) and in the air, or null. */
+  wild: { ground: WildSprite[]; air: WildSprite[] } | null;
   /** The weather model's ground height (m), to adjust its temperature to the trail's, or null. */
   weatherElevation: number | null;
   /** Roughly where the sky ends on screen (for rain splashes / lightning). */
@@ -139,6 +142,7 @@ export function drawOverlay(o: OverlayInput) {
 
   drawWorldSprites(o);
   drawBirds(o);
+  for (const a of o.wild?.air ?? []) spriteA(ctx, a.rows, a.x, a.y, a.keys, a.a, a.flip);
   if (o.state.phase !== 'intro' || o.state.introT > o.timeline.intro - 1.2) drawWeather(ctx, o.weather, o.state.t, W, H, o.sky.lamp > 0.5, o.skyH);
   drawHud(o);
   drawNext(o);
@@ -486,6 +490,10 @@ function drawWorldSprites(o: OverlayInput) {
 
   drawMap(o);
   drawDecor(o);
+  for (const a of o.wild?.ground ?? []) {
+    shadow(ctx, a.x, a.y + 1, a.rows[0].length + 1, a.a);
+    spriteA(ctx, a.rows, a.x, a.y + 1, a.keys, a.a, a.flip);
+  }
 
   for (const cp of o.checkpoints) {
     if (!cp.enabled) continue;

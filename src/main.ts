@@ -51,6 +51,7 @@ const ui = {
   envWater: $<HTMLInputElement>('envWater'),
   envLandmarks: $<HTMLInputElement>('envLandmarks'),
   envEffort: $<HTMLInputElement>('envEffort'),
+  envWild: $<HTMLInputElement>('envWild'),
   weather: $<HTMLSelectElement>('weather'),
   weatherInfo: $('weatherInfo'),
   zonesOn: $<HTMLInputElement>('zonesOn'),
@@ -359,6 +360,7 @@ function rebuild() {
       water: ui.envWater.checked,
       landmarks: ui.envLandmarks.checked,
       effort: ui.envEffort.checked,
+      wildlife: ui.envWild.checked,
     },
   });
   state.t = Math.min(state.t, state.timeline.duration);
@@ -586,6 +588,7 @@ function collectSettings() {
     envWater: ui.envWater.checked,
     envLandmarks: ui.envLandmarks.checked,
     envEffort: ui.envEffort.checked,
+    envWild: ui.envWild.checked,
     zonesEnabled: ui.zonesOn.checked,
     zoneStyle0: ui.zoneStyle[0].value,
     zoneStyle1: ui.zoneStyle[1].value,
@@ -622,7 +625,7 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.gateText === 'string') ui.gateText.value = s.gateText;
   if (typeof s.gateTagline === 'string') ui.gateTagline.value = s.gateTagline;
   if (s.scenery === 'auto' || s.scenery === 'tropical' || s.scenery === 'alpine' || s.scenery === 'classic') ui.scenery.value = s.scenery;
-  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight], ['envWater', ui.envWater], ['envLandmarks', ui.envLandmarks], ['envEffort', ui.envEffort]] as const) {
+  for (const [k, el] of [['envClouds', ui.envClouds], ['envLife', ui.envLife], ['envSigns', ui.envSigns], ['envSplits', ui.envSplits], ['envLight', ui.envLight], ['envWater', ui.envWater], ['envLandmarks', ui.envLandmarks], ['envEffort', ui.envEffort], ['envWild', ui.envWild]] as const) {
     if (typeof s[k] === 'boolean') el.checked = s[k] as boolean;
   }
   for (const [k, el] of [['zonesEnabled', ui.zonesOn], ['zoneTech', ui.zoneTech], ['zoneLabels', ui.zoneLabels]] as const) {
@@ -1160,7 +1163,7 @@ ui.logoColors.onchange = () => void setLogo(state.logoSource);
 for (const el of [ui.logoIntro, ui.logoBadge, ui.logoOutro]) el.onchange = () => rebuild();
 ui.gateMode.onchange = ui.gateColor.onchange = () => { rebuild(); void updateSoundtrack().then(syncAudio); };
 ui.gateText.oninput = ui.gateTagline.oninput = () => rebuild();
-for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits, ui.envLight, ui.envEffort]) el.onchange = () => rebuild();
+for (const el of [ui.scenery, ui.envClouds, ui.envLife, ui.envSigns, ui.envSplits, ui.envLight, ui.envEffort, ui.envWild]) el.onchange = () => rebuild();
 ui.envWater.onchange = () => { rebuild(); if (ui.envWater.checked) void ensureWater(); };
 ui.envLandmarks.onchange = () => {
   refreshCheckpoints();
