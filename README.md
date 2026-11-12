@@ -80,6 +80,8 @@ In the app: **Template PNG** downloads the current character's sheet to paint ov
 - `node scripts/sheets.mjs` — regenerate `docs/sprites/*.png` from the built-in characters.
 - `node scripts/gpx-to-fit.mjs in.gpx out.fit` — make a FIT test file from a GPX (adds synthetic temperature/totals; test data only).
 
+The browser scripts use the machine's GPU (`scripts/browser.mjs`). On a machine without one (CI), set `SWIFTSHADER=1` for software WebGL — it works, but is ~90× slower (the e2e takes ~7 min instead of ~13 s).
+
 Music: "Chiptune Adventures" by Juhani Junkala, CC0 ([OpenGameArt](https://opengameart.org/content/4-chiptunes-adventure)).
 
 Elevation data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen; SRTM, GMTED, NED, ETOPO1 and others).

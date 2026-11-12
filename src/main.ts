@@ -1199,7 +1199,12 @@ Object.assign(window, {
     soundtrackReady: () => updateSoundtrack().then(() => state.soundtrack?.duration ?? 0),
     exportMp4: async (scale = 4, duration?: number) => {
       await updateSoundtrack();
-      return exportMp4(renderer, { duration: duration ?? state.timeline!.duration, fps: 30, scale, audio: state.soundtrack });
+      state.exporting = true; // pause the live preview, like the Export button does
+      try {
+        return await exportMp4(renderer, { duration: duration ?? state.timeline!.duration, fps: 30, scale, audio: state.soundtrack });
+      } finally {
+        state.exporting = false;
+      }
     },
   },
 });

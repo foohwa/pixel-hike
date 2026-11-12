@@ -1,11 +1,11 @@
 // Screenshots of the preview at given video times.
 // usage: node scripts/shot.mjs <outdir> <3d|2d> <landscape|portrait> t1 t2 ...
 // env: BASE (default http://localhost:5199), SAMPLE=fit, PREFIX=name, SETUP='h.setActivity("trailrun")'
-import { chromium } from 'playwright';
+import { launch } from './browser.mjs';
 const [, , out, mode = '3d', aspect = 'landscape', ...ts] = process.argv;
 const base = process.env.BASE ?? 'http://localhost:5199';
 const prefix = process.env.PREFIX ?? `${mode}-${aspect}`;
-const browser = await chromium.launch({ channel: 'chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
 page.on('console', (m) => { if (m.type() === 'error') console.log('[console]', m.text()); });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));

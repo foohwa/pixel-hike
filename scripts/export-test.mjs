@@ -1,9 +1,9 @@
 // Renders the full MP4 in headless Chrome and saves it. usage: node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale]
-import { chromium } from 'playwright';
+import { launch } from './browser.mjs';
 import { writeFileSync } from 'node:fs';
 const [, , out, mode = '3d', aspect = 'landscape', scale = '4', dur = ''] = process.argv;
 const base = process.env.BASE ?? 'http://localhost:5199';
-const browser = await chromium.launch({ channel: 'chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const browser = await launch();
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(`${base}/?sample&nodisk`);
