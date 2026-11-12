@@ -21,21 +21,25 @@ export interface DecorFrame {
   signs: DecorItem[];
 }
 
-/** Map sprites for this frame (see PixelRenderer.mapFrame): screen positions, q = distance / camera distance. */
+/**
+ * Map sprites for this frame (see PixelRenderer.mapFrame): screen positions, q = distance / camera
+ * distance, a = how far faded in (0..1, drawn as a pixel dither), far = draw the small version.
+ */
+interface Spot { x: number; y: number; q: number; a: number; far: boolean }
 export interface MapFrame {
-  lamps: { x: number; y: number; q: number }[];
-  rapids: { x: number; y: number; q: number }[];
+  lamps: Spot[];
+  rapids: Spot[];
   /** tx/ty = the route's direction on screen (the bridge deck follows it). */
-  bridges: { x: number; y: number; q: number; tx: number; ty: number }[];
-  vehicles: { x: number; y: number; left: boolean; moto: boolean; color: string }[];
-  falls: { x: number; y: number; q: number }[];
+  bridges: (Spot & { tx: number; ty: number })[];
+  vehicles: { x: number; y: number; a: number; far: boolean; left: boolean; moto: boolean; color: string }[];
+  falls: Spot[];
   /**
    * A waterfall a short detour off the route, shown beside the trail where the route passes closest
    * (x/y), with an arrow sign at the trail edge (sx/sy) pointing towards it (left = arrow points left).
    */
-  sideFalls: { x: number; y: number; q: number; sx: number; sy: number; left: boolean; sprite: boolean }[];
-  camps: { x: number; y: number; q: number }[];
-  springs: { x: number; y: number; q: number }[];
+  sideFalls: (Spot & { sx: number; sy: number; left: boolean; sprite: boolean })[];
+  camps: Spot[];
+  springs: Spot[];
 }
 
 export interface DialState {
@@ -295,6 +299,51 @@ function drawFall(ctx: CanvasRenderingContext2D, x: number, y: number, h: number
 const CAMP_SIGN = ['kkkkkkk', 'kmmammk', 'kmaaamk', 'kkkkkkk', '...L...', '...L...'];
 const DROP = ['.s.', 'sSs', 'SsS', '.S.'];
 
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+/** Whether pixel (x, y) shows for something faded in to `a` (an ordered dither, so it dissolves in). */
+const shows = (x: number, y: number, a: number) => a >= 1 || (BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16 < a;
+
+/** fillRect, dropping pixels by the dither while `a` < 1. */
+function fpx(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, a: number) {
+  if (a >= 1) return ctx.fillRect(x, y, w, h);
+  for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (shows(xx, yy, a)) ctx.fillRect(xx, yy, 1, 1);
+}
+
+/** drawSprite (bottom-centre anchor), dithered while fading in. */
+function spriteA(ctx: CanvasRenderingContext2D, rows: string[], x: number, y: number, keys: Record<string, string>, a: number, flip = false) {
+  if (a >= 1) return drawSprite(ctx, rows, x, y, { keys, flip });
+  if (a <= 0) return;
+  const w = Math.max(...rows.map((r) => r.length)), h = rows.length;
+  const x0 = Math.round(x - Math.floor(w / 2)), y0 = Math.round(y - h);
+  rows.forEach((row, ry) => {
+    for (let rx = 0; rx < row.length; rx++) {
+      const col = keys[row[rx]];
+      if (!col) continue;
+      const px = x0 + (flip ? w - 1 - rx : rx), py = y0 + ry;
+      if (!shows(px, py, a)) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect(px, py, 1, 1);
+    }
+  });
+}
+
+/** A soft (checker-dithered) shadow on the ground under a prop, about w px wide. */
+function shadow(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, a: number) {
+  ctx.fillStyle = C.ink;
+  const h = Math.floor(w / 2);
+  for (let k = -h; k <= h; k++) {
+    const px = x + k;
+    if (((px + y) & 1) === 0 && shows(px, y, a)) ctx.fillRect(px, y, 1, 1);
+  }
+}
+
+// small versions for far away (3D)
+const CAR_FAR = ['.rr.', 'krrk'];
+const MOTO_FAR = ['.h', 'kk'];
+const CAMP_SIGN_FAR = ['kak', '.L.', '.L.'];
+const ARROW_SIGN_FAR = ['kak', '.L.', '.L.'];
+const DROP_FAR = ['s', 'S'];
+
 function drawMap(o: OverlayInput) {
   const m = o.map;
   if (!m) return;
@@ -306,17 +355,17 @@ function drawMap(o: OverlayInput) {
   for (const l of m.lamps) {
     if (l.q < 1.3) {
       ctx.fillStyle = C.ink2;
-      ctx.fillRect(l.x, l.y - 3, 1, 3);
+      fpx(ctx, l.x, l.y - 3, 1, 3, l.a);
       ctx.fillStyle = C.cream;
-      ctx.fillRect(l.x, l.y - 4, 1, 1);
+      fpx(ctx, l.x, l.y - 4, 1, 1, l.a);
       if (l.q < 0.8) {
         ctx.fillStyle = C.yellow;
-        ctx.fillRect(l.x - 1, l.y - 4, 1, 1);
-        ctx.fillRect(l.x + 1, l.y - 4, 1, 1);
+        fpx(ctx, l.x - 1, l.y - 4, 1, 1, l.a);
+        fpx(ctx, l.x + 1, l.y - 4, 1, 1, l.a);
       }
     } else {
       ctx.fillStyle = l.q < 2.2 ? C.cream : C.yellow;
-      ctx.fillRect(l.x, l.y - 1, 1, 1);
+      fpx(ctx, l.x, l.y - 1, 1, 1, l.a);
     }
   }
 
@@ -324,23 +373,23 @@ function drawMap(o: OverlayInput) {
   for (const r of m.rapids) {
     const ph = Math.floor(t * 6 + r.x * 0.7) % 3;
     ctx.fillStyle = night ? C.ink2 : C.rockDark;
-    ctx.fillRect(r.x, r.y - 1, 1, 1);
+    fpx(ctx, r.x, r.y - 1, 1, 1, r.a);
     ctx.fillStyle = night ? C.rockDark : C.white;
-    ctx.fillRect(r.x - 1 + ph, r.y, 1, 1);
-    if (r.q < 1.1) ctx.fillRect(r.x + 1 - ph, r.y - 2 + (ph & 1), 1, 1);
+    fpx(ctx, r.x - 1 + ph, r.y, 1, 1, r.a);
+    if (r.q < 1.1) fpx(ctx, r.x + 1 - ph, r.y - 2 + (ph & 1), 1, 1, r.a);
   }
 
-  // waterfalls at their real spot, sized by distance
+  // waterfalls at their real spot, sized by distance (map view; in 3D they're built into the terrain)
   for (const f of m.falls) {
     if (f.q < 1.2) drawFallSprite(ctx, FALL_M, f.x, f.y, t, night);
     else drawFall(ctx, f.x, f.y, f.q < 2.2 ? 8 : 5, 2, t, night);
   }
   // …and one just off the route, brought up beside the trail with a sign pointing the way
+  const signKeys = { k: C.ink, m: C.cream, a: C.sky, L: C.brown };
   for (const f of m.sideFalls) {
-    if (!f.sprite) { /* 3D: the waterfall is part of the terrain, just the sign here */ }
-    else if (f.q < 2.6) drawFallSprite(ctx, FALL_L, f.x, f.y, t, night);
-    else drawFallSprite(ctx, FALL_M, f.x, f.y, t, night);
-    drawSprite(ctx, ARROW_SIGN, f.sx, f.sy + 1, { keys: { k: C.ink, m: C.cream, a: C.sky, L: C.brown }, flip: f.left });
+    if (f.sprite) drawFallSprite(ctx, f.q < 2.6 ? FALL_L : FALL_M, f.x, f.y, t, night);
+    shadow(ctx, f.sx, f.sy + 1, f.far ? 3 : 5, f.a);
+    spriteA(ctx, f.far ? ARROW_SIGN_FAR : ARROW_SIGN, f.sx, f.sy + 1, signKeys, f.a, f.left);
   }
 
   // bridges: a plank deck along the route with a rail and posts either side
@@ -349,43 +398,52 @@ function drawMap(o: OverlayInput) {
     const nx = -b.ty, ny = b.tx;
     const at = (s: number, a: number) => [Math.round(b.x + b.tx * s + nx * a), Math.round(b.y + b.ty * s + ny * a)];
     ctx.fillStyle = night ? C.brownDark : C.brown;
-    for (let s = -L; s <= L; s++) for (const a of [-1, 0, 1]) { const [x, y] = at(s, a); ctx.fillRect(x, y, 1, 1); }
+    for (let s = -L; s <= L; s++) for (const a of [-1, 0, 1]) { const [x, y] = at(s, a); fpx(ctx, x, y, 1, 1, b.a); }
     ctx.fillStyle = night ? C.ink2 : C.tan;
-    for (let s = -L; s <= L; s += 2) { const [x, y] = at(s, 0); ctx.fillRect(x, y, 1, 1); }
+    for (let s = -L; s <= L; s += 2) { const [x, y] = at(s, 0); fpx(ctx, x, y, 1, 1, b.a); }
     ctx.fillStyle = C.ink;
     for (let s = -L; s <= L; s++) {
       for (const a of [-2, 2]) {
         const [x, y] = at(s, a);
-        ctx.fillRect(x, y - 1, 1, 1);
-        if (s % 3 === 0 || Math.abs(s) === L) ctx.fillRect(x, y, 1, 1);
+        fpx(ctx, x, y - 1, 1, 1, b.a);
+        if (s % 3 === 0 || Math.abs(s) === L) fpx(ctx, x, y, 1, 1, b.a);
       }
     }
   }
 
   // traffic
   for (const v of m.vehicles) {
-    const rows = v.moto ? MOTO : CAR;
+    const rows = v.far ? (v.moto ? MOTO_FAR : CAR_FAR) : v.moto ? MOTO : CAR;
     const keys = { k: C.ink, r: v.color === C.white && night ? C.rock : v.color, b: night ? C.ink2 : C.skyLight, y: C.yellow, h: v.color };
-    drawSprite(ctx, rows, v.x, v.y + 1, { keys, flip: v.left });
-    if (night) {
-      // headlight beam on the road ahead
-      ctx.fillStyle = C.cream;
+    shadow(ctx, v.x, v.y + 1, rows[0].length + 1, v.a);
+    spriteA(ctx, rows, v.x, v.y + 1, keys, v.a, v.left);
+    if (night && v.a > 0.5) {
+      // headlight beam on the road ahead, tail light behind
       const dx = v.left ? -1 : 1;
-      const fx = v.x + dx * (Math.ceil(rows[0].length / 2) + 1);
+      const half = Math.ceil(rows[0].length / 2);
+      const fx = v.x + dx * (half + 1);
+      ctx.fillStyle = C.cream;
       ctx.fillRect(fx, v.y - 1, 1, 1);
-      ctx.fillRect(fx + dx, v.y - 1, 1, 1);
-      ctx.fillStyle = C.yellow;
-      ctx.fillRect(fx + dx * 2, v.y - 1, 1, 1);
-      ctx.fillStyle = C.red; // tail light
-      ctx.fillRect(v.x - dx * Math.ceil(rows[0].length / 2), v.y - 2, 1, 1);
+      if (!v.far) {
+        ctx.fillRect(fx + dx, v.y - 1, 1, 1);
+        ctx.fillStyle = C.yellow;
+        ctx.fillRect(fx + dx * 2, v.y - 1, 1, 1);
+      }
+      ctx.fillStyle = C.red;
+      ctx.fillRect(v.x - dx * half, v.y - (v.far ? 1 : 2), 1, 1);
     }
   }
 
   // camps beside the trail: a little tent sign; springs: a bobbing water drop
-  for (const c of m.camps) drawSprite(ctx, CAMP_SIGN, c.x + 7, c.y + 1, { keys: { k: C.ink, m: C.cream, a: C.orange, L: C.brown } });
+  const campKeys = { k: C.ink, m: C.cream, a: C.orange, L: C.brown };
+  for (const c of m.camps) {
+    shadow(ctx, c.x + 7, c.y + 1, c.far ? 3 : 5, c.a);
+    spriteA(ctx, c.far ? CAMP_SIGN_FAR : CAMP_SIGN, c.x + 7, c.y + 1, campKeys, c.a);
+  }
   for (const s of m.springs) {
     const bob = Math.floor(t * 2) % 2;
-    drawSprite(ctx, DROP, s.x + 6, s.y - 2 - bob, { keys: { s: C.skyLight, S: C.sky } });
+    shadow(ctx, s.x + 6, s.y, s.far ? 1 : 3, s.a);
+    spriteA(ctx, s.far ? DROP_FAR : DROP, s.x + 6, s.y - 2 - bob, { s: C.skyLight, S: C.sky }, s.a);
   }
 }
 

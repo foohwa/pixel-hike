@@ -98,6 +98,9 @@ export class PixelRenderer {
   private toasts: { text: string; t: number }[] = [];
   /** Compass direction of the best outlook at each viewpoint checkpoint (cached per checkpoint). */
   private viewDir = new Map<string, number>();
+  /** Map sprites seen last frame → video time each came into view (for fading in), and that frame's time. */
+  private mapSeen = new Map<string, number>();
+  private mapT = -1;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -844,13 +847,23 @@ export class PixelRenderer {
     const cam = this.camera.position;
     const R = this.rig!.camDist;
     const W = this.W, H = this.H;
-    const vis = (x: number, y: number, z: number, maxQ: number) => {
+    // things fade in (pixel dither) when they come out from behind a ridge or into range, rather than
+    // popping; a jump in time (seek, first frame) shows everything at once
+    const jump = Math.abs(st.t - this.mapT) > 0.2;
+    this.mapT = st.t;
+    const prev = this.mapSeen, seen = new Map<string, number>();
+    const vis = (x: number, y: number, z: number, maxQ: number, id: string) => {
       const q = is2d ? Math.hypot(x - hx, z - hz) / (R * 3) : Math.hypot(x - cam.x, y - cam.y, z - cam.z) / R;
       if (q > maxQ) return null;
       const p = this.projectF(x, y, z);
       if (!p.visible || p.x < -8 || p.x > W + 8 || p.y < -8 || p.y > H + 8) return null;
       if (!is2d && this.occluded(x, y, z)) return null;
-      return { x: Math.round(p.x), y: Math.round(p.y), q: is2d ? 2.4 : q };
+      const since = jump ? st.t - 1 : prev.get(id) ?? st.t;
+      seen.set(id, since);
+      const range = is2d ? 1 : clamp((maxQ - q) / (maxQ * 0.2), 0, 1);
+      const a = Math.min(range, clamp((st.t - since) / 0.3, 0, 1));
+      // far = draw the small version (3D only: the map view is all one scale)
+      return { x: Math.round(p.x), y: Math.round(p.y), q: is2d ? 2.4 : q, a, far: !is2d && q > 1.6 };
     };
     const out: MapFrame = { lamps: [], rapids: [], bridges: [], vehicles: [], falls: [], sideFalls: [], camps: [], springs: [] };
 
@@ -858,17 +871,17 @@ export class PixelRenderer {
       if (night) {
         const L = sp.lamps;
         for (let i = 0; i < L.length && out.lamps.length < 1500; i += 3) {
-          const v = vis(L[i], L[i + 1], L[i + 2], 3);
+          const v = vis(L[i], L[i + 1], L[i + 2], 3, `l${i}`);
           if (v) out.lamps.push(v);
         }
       }
       const Rp = sp.rapids;
       for (let i = 0; i < Rp.length; i += 3) {
-        const v = vis(Rp[i], Rp[i + 1], Rp[i + 2], 1.3);
+        const v = vis(Rp[i], Rp[i + 1], Rp[i + 2], 1.3, `r${i}`);
         if (v) out.rapids.push(v);
       }
-      for (const b of sp.bridges) {
-        const v = vis(b.x, b.y, b.z, 2.4);
+      for (const [bi, b] of sp.bridges.entries()) {
+        const v = vis(b.x, b.y, b.z, 2.4, `b${bi}`);
         if (!v) continue;
         const a = this.projectF(sampleAt(track, track.x, b.d - 20), b.y, sampleAt(track, track.z, b.d - 20));
         const c = this.projectF(sampleAt(track, track.x, b.d + 20), b.y, sampleAt(track, track.z, b.d + 20));
@@ -894,31 +907,32 @@ export class PixelRenderer {
           const s0 = rnd() * p.len;
           const s = (((s0 + dirn * st.t * speed) % p.len) + p.len) % p.len;
           const at = pathPoint(p, s), ahead = pathPoint(p, clamp(s + dirn * 12, 0, p.len));
-          const q = vis(at[0], at[1], at[2], 2.2);
+          const q = vis(at[0], at[1], at[2], 2.2, `v${i}.${v}`);
           if (!q) continue;
           const f = this.projectF(ahead[0], ahead[1], ahead[2]);
-          out.vehicles.push({ x: q.x, y: q.y, left: f.x < q.x - 0.01, moto: rnd() < 0.4, color: COLORS[Math.floor(rnd() * COLORS.length)] });
+          out.vehicles.push({ x: q.x, y: q.y, a: q.a, far: q.far, left: f.x < q.x - 0.01, moto: rnd() < 0.4, color: COLORS[Math.floor(rnd() * COLORS.length)] });
         }
       }
     }
     if (env.landmarks) {
-      for (const p of sp.pois) {
+      for (const [pi, p] of sp.pois.entries()) {
         if (p.kind === 'waterfall') {
           // in 3D the waterfall is built into the terrain (falls3d.ts); the sprites are for the map view
-          const v = is2d ? vis(p.x, p.y, p.z, 3.5) : null;
+          const v = is2d ? vis(p.x, p.y, p.z, 3.5, `p${pi}`) : null;
           if (v) out.falls.push(v);
           if (p.d == null && p.near.off < 2500) {
-            const s = this.sideFall(p, vis);
+            const s = this.sideFall(p, (x, y, z, m) => vis(x, y, z, m, `s${pi}`));
             if (s) out.sideFalls.push(s);
           }
         } else if (p.d != null && (p.kind === 'camp' || p.kind === 'spring')) {
           // a checkpoint at the same spot already marks it (and its tent would clash with the sign)
           if (p.kind === 'camp' && this.data!.checkpoints.some((c) => c.enabled && c.kind !== 'start' && Math.abs(c.d - p.d!) < 300)) continue;
-          const v = vis(p.x, p.y, p.z, p.kind === 'camp' ? 2.2 : 1.8);
+          const v = vis(p.x, p.y, p.z, p.kind === 'camp' ? 2.2 : 1.8, `p${pi}`);
           if (v) (p.kind === 'camp' ? out.camps : out.springs).push(v);
         }
       }
     }
+    this.mapSeen = seen;
     return out;
   }
 
@@ -928,7 +942,7 @@ export class PixelRenderer {
    */
   private sideFall(
     p: { x: number; z: number; near: { d: number } },
-    vis: (x: number, y: number, z: number, maxQ: number) => { x: number; y: number; q: number } | null,
+    vis: (x: number, y: number, z: number, maxQ: number) => { x: number; y: number; q: number; a: number; far: boolean } | null,
   ): MapFrame['sideFalls'][number] | null {
     const { track, terrain } = this.data!;
     const d = p.near.d;
@@ -948,7 +962,7 @@ export class PixelRenderer {
     const px = clamp(22 / Math.max(0.75, v.q), 18, 26); // clear of the hiker sprite
     return {
       x: Math.round(v.x + sx * px), y: Math.round(v.y + sy * px * 0.6), q: v.q,
-      sx: Math.round(v.x + sx * 6), sy: Math.round(v.y + sy * 4), left: sx < 0, sprite: this.mode === '2d',
+      sx: Math.round(v.x + sx * 6), sy: Math.round(v.y + sy * 4), left: sx < 0, sprite: this.mode === '2d', a: v.a, far: v.far,
     };
   }
 
