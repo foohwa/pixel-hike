@@ -75,6 +75,8 @@ export interface OverlayInput {
   /** Screen position of each enabled checkpoint. */
   cpScreen: Map<string, ScreenPoint>;
   showMinimap: boolean;
+  /** Date line on the intro title card. */
+  showDate: boolean;
   logo: EventLogo | null;
   /** Start/finish arch scenes + mini arches on the map, or null. */
   gate: GateOptions | null;
@@ -1042,14 +1044,14 @@ function drawTitleCard(o: OverlayInput) {
   if (state.phase !== 'intro' || state.introT > end) return;
   const slide = clamp((state.introT - (end - 0.3)) / 0.3, 0, 1);
   const date = new Date(track.stats.startTime + o.tzOffsetMin * 60000);
-  const dateStr = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+  const dateStr = o.showDate ? `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}` : '';
   const statStr = `${((track.stats.distance * track.distScale) / 1000).toFixed(1)} KM  ^${fmtInt(track.stats.ascent)} M`;
   let title = o.title.toUpperCase();
   let scale = 2;
   if (textWidth(title, 2) > W - 28) scale = 1;
   if (textWidth(title, 1) > W - 20) title = title.slice(0, Math.floor((W - 20) / 6));
   const bw = Math.max(textWidth(title, scale), textWidth(dateStr), textWidth(statStr)) + 20;
-  const bh = 7 * scale + 32;
+  const bh = 7 * scale + (dateStr ? 32 : 22);
   const x = Math.round(W / 2 - bw / 2);
   // event logo sits on its own dark plate above the card (logos are usually made for dark backgrounds)
   const logo = o.logo?.intro ? o.logo.set.get(logoHeight(o, W > H ? 48 : 56, bw), false) : null;
@@ -1066,8 +1068,8 @@ function drawTitleCard(o: OverlayInput) {
   ctx.fillStyle = C.coral;
   ctx.fillRect(x + 2, y + 2, bw - 4, 2);
   drawText(ctx, title, W / 2, y + 8, C.ink, { scale, align: 'center' });
-  drawText(ctx, dateStr, W / 2, y + 7 * scale + 12, C.wine, { align: 'center' });
-  drawText(ctx, statStr, W / 2, y + 7 * scale + 22, C.forest, { align: 'center' });
+  if (dateStr) drawText(ctx, dateStr, W / 2, y + 7 * scale + 12, C.wine, { align: 'center' });
+  drawText(ctx, statStr, W / 2, y + 7 * scale + (dateStr ? 22 : 12), C.forest, { align: 'center' });
 }
 
 function drawOutroCard(o: OverlayInput) {

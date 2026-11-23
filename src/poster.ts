@@ -23,6 +23,8 @@ export interface PosterInput {
   title: string;
   activity: Activity;
   tzOffsetMin: number;
+  /** Leave the date off the subtitle (just the activity). */
+  showDate?: boolean;
   hero: SpriteSet;
   logo: LogoSet | null;
   /** Small pixel versions of up to 4 photos. */
@@ -82,7 +84,8 @@ export function drawPoster(p: PosterInput): HTMLCanvasElement | null {
   while (textWidth(title, scale) > W - 16) title = title.slice(0, -1);
   drawText(ctx, title, W / 2, scale === 2 ? 10 : 13, C.yellow, { scale, align: 'center', shadow: C.red });
   const date = new Date(track.stats.startTime + p.tzOffsetMin * 60000);
-  const sub = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}  -  ${ACTIVITY_LABEL[p.activity].toUpperCase()}`;
+  const activity = ACTIVITY_LABEL[p.activity].toUpperCase();
+  const sub = p.showDate === false ? activity : `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}  -  ${activity}`;
   drawText(ctx, sub, W / 2, 28, C.skyLight, { align: 'center' });
 
   // the map

@@ -110,6 +110,7 @@ export class PixelRenderer {
   mode: ViewMode = '3d';
   aspect: Aspect = 'landscape';
   showMinimap = true;
+  showDate = false;
   W = 320;
   H = 180;
   private facingLeft = false;
@@ -794,6 +795,7 @@ export class PixelRenderer {
       petFacingLeft: this.facingLeft,
       cpScreen,
       showMinimap: this.showMinimap,
+      showDate: this.showDate,
       logo: this.data.logo,
       gate: this.data.gate,
       zones: this.data.zones,

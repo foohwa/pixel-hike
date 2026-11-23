@@ -85,6 +85,7 @@ const ui = {
   musicFile: $<HTMLInputElement>('musicFile'),
   musicCredit: $('musicCredit'),
   minimap: $<HTMLInputElement>('minimap'),
+  showDate: $<HTMLInputElement>('showDate'),
   tz: $<HTMLSelectElement>('tz'),
   cps: $('cps'),
   saved: $('saved'),
@@ -611,6 +612,7 @@ function collectSettings() {
     mode: renderer.mode,
     aspect: renderer.aspect,
     minimap: ui.minimap.checked,
+    showDate: ui.showDate.checked,
     tz: Number(ui.tz.value),
     music: ui.music.value === 'custom' ? 'auto' : ui.music.value, // uploaded files aren't stored
     volume: Number(ui.volume.value),
@@ -657,6 +659,7 @@ function applySettings(s: Record<string, unknown>) {
   if (s.mode === '2d' || s.mode === '3d') { renderer.setMode(s.mode); setSeg(ui.mode, s.mode); }
   if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); ui.screen.classList.toggle('tall', s.aspect === 'portrait'); fitCanvas(); }
   if (typeof s.minimap === 'boolean') { ui.minimap.checked = s.minimap; renderer.showMinimap = s.minimap; }
+  if (typeof s.showDate === 'boolean') { ui.showDate.checked = s.showDate; renderer.showDate = s.showDate; }
   if (typeof s.tz === 'number') ui.tz.value = String(s.tz);
   if (typeof s.music === 'string') ui.music.value = s.music;
   if (typeof s.volume === 'number') ui.volume.value = String(s.volume);
@@ -1177,6 +1180,7 @@ ui.duration.oninput = () => { rebuild(); updateSoundtrackSoon(); };
 ui.title.oninput = () => rebuild();
 ui.tz.onchange = () => rebuild();
 ui.minimap.onchange = () => { renderer.showMinimap = ui.minimap.checked; needsRender = true; persist(); };
+ui.showDate.onchange = () => { renderer.showDate = ui.showDate.checked; needsRender = true; persist(); };
 ui.music.onchange = () => { void updateSoundtrack(); persist(); };
 ui.volume.oninput = () => { updateSoundtrackSoon(); persist(); };
 ui.musicFile.onchange = async () => {
@@ -1449,7 +1453,7 @@ async function makePoster() {
   }
   const small = drawPoster({
     renderer, track: state.track, checkpoints: state.checkpoints, title: ui.title.value || 'My Hike', activity: state.activity,
-    tzOffsetMin: Number(ui.tz.value || 0), hero: heroSet(), logo: state.logoSet, photos: thumbs,
+    tzOffsetMin: Number(ui.tz.value || 0), showDate: ui.showDate.checked, hero: heroSet(), logo: state.logoSet, photos: thumbs,
   });
   renderer.renderAt(state.t);
   return small && upscale(small, 5);
