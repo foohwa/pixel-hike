@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import type { BigSet } from './bighero';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { SpriteSet } from './characters';
 import type { GateOptions } from './gate';
 import { openness } from './landmarks';
-import { frameOf, type View } from './characters';
+import { frameOf, type View, headLift } from './characters';
 import { SceneFigures } from './hero3d';
 import { clockText, drawOverlay, pickAnim, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
@@ -39,6 +40,8 @@ export interface SceneData {
   tzOffsetMin: number;
   activity: Activity;
   hero: SpriteSet;
+  /** Detailed hero for the start / finish close-ups (bighero.ts), or null. */
+  big?: BigSet | null;
   pet: SpriteSet | null;
   logo: EventLogo | null;
   gate: GateOptions | null;
@@ -731,13 +734,16 @@ export class PixelRenderer {
     } else this.view = 'side';
     const effort = effortAt(track, st.d, st.t, env.effort && st.phase === 'move');
     const heroT = effort.slow ? st.t * 0.72 : st.t; // a heavier, slower step when flat out
+    // a character pack's own-colour sprite would be lit, palette-snapped and dithered in the scene:
+    // draw it crisp on the overlay instead and leave only its shadow in 3D
+    const heroOnTop = (this.data.hero.size ?? 16) > 16;
     if (inScene && hiker.visible && !this.snap) {
       const anim = pickAnim({ state: st, track, activity: this.data.activity, sky });
       const feet = new THREE.Vector3(hx, hy, hz);
       const useShadowDir = env.light && shared.uShadow.value > 0;
       const light = (useShadowDir ? shared.uShadowDir.value : shared.uSunDir.value).clone().normalize();
       const shadowK = useShadowDir ? shared.uShadow.value : sky.lamp < 0.5 ? 1 : 0;
-      this.figures.place(0, frameOf(this.data.hero, anim, heroT, this.facingLeft, this.view), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK);
+      this.figures.place(0, frameOf(this.data.hero, anim, heroT, this.facingLeft, this.view), feet, hiker.x, hiker.y, this.camera, this.W, this.H, terrain, r.camDist, light, shadowK, !heroOnTop);
       if (this.data.pet && petAt) {
         // the companion's feet: its screen spot, at the walker's depth, dropped onto the ground
         const ndcZ = feet.clone().project(this.camera).z;
@@ -768,7 +774,7 @@ export class PixelRenderer {
 
     const decor = this.decorFrame(st, hiker);
     const wild = env.wildlife && (st.phase === 'move' || st.phase === 'pause')
-      ? { ground: this.wildGround(st), air: airSprites(this.wildAir, st.t, this.W, this.H, hiker) }
+      ? { ground: this.wildGround(st), air: airSprites(this.wildAir, st.t, this.W, this.H, { ...hiker, y: hiker.y - headLift(this.data.hero) }) }
       : null;
     const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
@@ -788,6 +794,7 @@ export class PixelRenderer {
       title: this.data.title,
       tzOffsetMin: this.data.tzOffsetMin,
       hero: this.data.hero,
+      big: this.data.big ?? null,
       heroAt: hiker,
       facingLeft: this.facingLeft,
       pet: this.data.pet,
@@ -802,6 +809,7 @@ export class PixelRenderer {
       decor,
       map,
       heroInScene: inScene,
+      heroOnTop: inScene && (this.data.hero.size ?? 16) > 16,
       heroView: this.view,
       sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
       env: this.data.env,

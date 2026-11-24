@@ -1,0 +1,39 @@
+{
+  "pangolin": {
+    "row": 493401,
+    "height": 11
+  },
+  "boar": {
+    "row": 634,
+    "height": 12,
+    "colors": [
+      "ink",
+      "brownDark",
+      "brown",
+      "tan",
+      "coral",
+      "wine",
+      "skin",
+      "white"
+    ]
+  },
+  "monitor": {
+    "row": 12132,
+    "height": 9
+  },
+  "pitcher": {
+    "row": 74297,
+    "decor": true,
+    "height": 10
+  },
+  "mushrooms": {
+    "row": 17541,
+    "decor": true,
+    "height": 7
+  },
+  "treeFern": {
+    "row": 474700,
+    "decor": true,
+    "height": 11
+  }
+}

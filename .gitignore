@@ -31,3 +31,6 @@ public/samples/
 # checkpoint edits mirrored by the dev server (personal names/notes)
 edits/
 e2e-*
+
+# your own likeness (Grok "me" sprite sources)
+art/grok/me/

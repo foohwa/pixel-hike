@@ -1,3 +1,4 @@
+import { bigFrameOf, type BigSet } from './bighero';
 import { frameOf, type SpriteSet } from './characters';
 import { drawText, textWidth } from './font';
 import type { LogoSet } from './logo';
@@ -33,6 +34,8 @@ export interface GateInput {
   sky: SkyState;
   gate: GateOptions;
   hero: SpriteSet;
+  /** Detailed version of the hero for this close-up (bighero.ts), drawn 1:1 instead of the 2× sprite. */
+  big?: BigSet | null;
   pet: SpriteSet | null;
   logo: LogoSet | null;
   track: Track;
@@ -173,17 +176,23 @@ export function drawGateScene(g: GateInput) {
     anim = run ? 'run' : 'walk';
     heroX = -12 + (u / 0.35) * (W / 2 + 12);
   } else anim = 'cheer';
-  const drawChar = (set: SpriteSet, x: number, tOff: number) => {
-    const f = frameOf(set, anim, state.t + tOff, flip);
+  const drawChar = (set: SpriteSet, x: number, tOff: number, big: BigSet | null = null) => {
     ctx.fillStyle = C.ink;
     ctx.fillRect(Math.round(x - 8), ground - 1, 17, 2);
-    ctx.drawImage(f, Math.round(x - 8 * S), ground - 16 * S + 1, 16 * S, 16 * S);
+    const b = bigFrameOf(big, anim, state.t + tOff);
+    if (b) return ctx.drawImage(b, Math.round(x - b.width / 2), ground - b.height + 1);
+    const f = frameOf(set, anim, state.t + tOff, flip);
+    const k = (set.size ?? 16) > 20 ? 1 : S; // a taller trail set is already big enough
+    ctx.drawImage(f, Math.round(x - (f.width * k) / 2), ground - f.height * k + 1, f.width * k, f.height * k);
   };
   if (g.pet) drawChar(g.pet, heroX - 30, 0.13);
-  drawChar(g.hero, heroX, 0);
+  drawChar(g.hero, heroX, 0, g.big);
 
   // ---- big text: countdown / finisher
   const midY = archTop + bannerH + (tag ? 14 : 6);
+  // a big hero fills the gap under the banner, so the big text goes up into the sky above the arch
+  const lifted = !!g.big;
+  const textY = (scale: number, y: number) => (lifted ? Math.max(2, archTop - 7 * scale - 3) : y);
   if (start) {
     const steps: [number, number, string, string][] = [
       [0.3, 0.48, '3', C.white], [0.48, 0.66, '2', C.white], [0.66, 0.84, '1', C.white], [0.84, 1.01, 'GO!', C.yellow],
@@ -192,7 +201,7 @@ export function drawGateScene(g: GateInput) {
       if (u < a || u >= b) continue;
       const pop = Math.min(1, (u - a) / 0.04);
       const sc = pop < 1 ? 5 : 4;
-      drawText(ctx, s, W / 2, midY + (pop < 1 ? -2 : 0), col, { align: 'center', scale: sc, shadow: C.ink });
+      drawText(ctx, s, W / 2, textY(sc, midY + (pop < 1 ? -2 : 0)), col, { align: 'center', scale: sc, shadow: C.ink });
     }
     if (u < 0.3) {
       const d = new Date(g.track.stats.startTime + g.tzOffsetMin * 60000);
@@ -202,7 +211,7 @@ export function drawGateScene(g: GateInput) {
   } else if (u >= 0.35) {
     const head = run ? 'FINISHER!' : 'FINISH!';
     const hs = textWidth(head, 3) < archW - 2 * pillarW ? 3 : textWidth(head, 2) < archW - 8 ? 2 : 1;
-    drawText(ctx, head, W / 2, midY + (hs < 3 ? 6 : 0), C.yellow, { align: 'center', scale: hs, shadow: C.ink });
+    drawText(ctx, head, W / 2, textY(hs, midY + (hs < 3 ? 6 : 0)), C.yellow, { align: 'center', scale: hs, shadow: C.ink });
     const el = g.track.stats.endTime - g.track.stats.startTime;
     plate(ctx, W / 2, H - 16, run ? elapsed(el) : hhmm(new Date(g.track.stats.endTime + g.tzOffsetMin * 60000)));
     confetti(ctx, W / 2, ground - 20, (u - 0.35) * 3.8);

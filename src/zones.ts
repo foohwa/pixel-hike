@@ -1,3 +1,4 @@
+import { ATLAS_DECOR } from './atlasart';
 import { C } from './palette';
 import type { Track } from './track';
 
@@ -218,9 +219,10 @@ const SPECK = ['g'];
 type Pick = [string[], number][];
 
 const SETS: Record<ZoneStyle, { density: number; near: Pick; far: string[][] }> = {
-  jungle: { density: 2.3, near: [[FERN, 4], [PALM, 2], [TARO, 2], [VINE_BUSH, 2], [LEAVES, 1]], far: [SPECK, ['gF']] },
-  forest: { density: 1.4, near: [[BUSH, 4], [PINE, 3], [MUSHROOM, 1], [LOG, 1], [FERN, 1]], far: [['F'], ['fF']] },
-  mossy: { density: 2, near: [[MOSS_MOUND, 4], [MOSSY_TREE, 3], [MOSS_CARPET, 3], [MOSSY_LOG, 1], [PITCHER, 1]], far: [['l'], ['lG']] },
+  // ATLAS_DECOR: bigger, more detailed props from the CC0 Pixel Art Atlas (scripts/atlas-sprites.mjs), kept rare
+  jungle: { density: 2.3, near: [[FERN, 4], [PALM, 2], [TARO, 2], [VINE_BUSH, 2], [LEAVES, 1], [ATLAS_DECOR.treeFern, 1]], far: [SPECK, ['gF']] },
+  forest: { density: 1.4, near: [[BUSH, 4], [PINE, 3], [MUSHROOM, 1], [LOG, 1], [FERN, 1], [ATLAS_DECOR.mushrooms, 0.5]], far: [['F'], ['fF']] },
+  mossy: { density: 2, near: [[MOSS_MOUND, 4], [MOSSY_TREE, 3], [MOSS_CARPET, 3], [MOSSY_LOG, 1], [PITCHER, 1], [ATLAS_DECOR.pitcher, 0.7], [ATLAS_DECOR.mushrooms, 0.5]], far: [['l'], ['lG']] },
   rocky: { density: 1.3, near: [[BOULDER, 3], [SCREE, 3], [TUFT, 2], [PEBBLE, 2]], far: [['r'], ['rR']] },
   meadow: { density: 1.4, near: [[TUFT, 4], [FLOWER_Y, 2], [FLOWER_P, 2], [PEBBLE, 1]], far: [['G'], ['lG']] },
   plain: { density: 0, near: [], far: [] },

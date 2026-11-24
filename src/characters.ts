@@ -71,6 +71,11 @@ export interface SpriteSet {
   /** Pixel inside the frame where the head-lamp sits (for the night glow), or null. */
   lamp: [number, number] | null;
   /**
+   * How tall the figure stands, in px (default 16). Frames may be any size (bottom-centre anchored);
+   * effects placed by the head (sweat, zZz, speech bubbles…) move up by `size − 16`.
+   */
+  size?: number;
+  /**
    * Seen from behind (walking away from the camera) and from the front (walking towards it), for the
    * animations that have them; others fall back to the side view. Built-in people only.
    */
@@ -801,3 +806,6 @@ export function frameOf(set: SpriteSet, anim: Anim, t: number, flip: boolean, vi
   const i = Math.floor(t * ANIM_INFO[anim].fps) % list.length;
   return list[i];
 }
+
+/** How much higher than a 16 px figure the head of this set sits (0 for the built-ins). */
+export const headLift = (set: SpriteSet | null | undefined) => Math.max(0, (set?.size ?? FRAME) - FRAME);

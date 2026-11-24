@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { FRAME } from './characters';
 import { C, rgb01 } from './palette';
 import { shared, type Terrain } from './terrain';
 
@@ -84,9 +83,12 @@ export class SceneFigures {
     camDist: number,
     light: THREE.Vector3,
     shadowK: number,
+    /** false: only the shadow goes in the scene; the sprite itself is drawn crisp on the overlay. */
+    showSprite = true,
   ) {
     const f = this.figures[i];
     f.quad.visible = f.shadow.visible = !!frame;
+    if (!showSprite) f.quad.visible = false;
     if (!frame) return;
     const tex = this.texture(frame);
     f.quad.material.uniforms.uMap.value = tex;
@@ -96,8 +98,9 @@ export class SceneFigures {
     const toCam = this.tmp.copy(cam.position).sub(feet).normalize();
     const zNdc = feet.clone().addScaledVector(toCam, camDist * 0.02).project(cam).z;
     const corner = (px: number, py: number) => new THREE.Vector3((px / W) * 2 - 1, 1 - (py / H) * 2, zNdc).unproject(cam);
-    const x0 = sx - FRAME / 2, y0 = sy - FRAME;
-    const pts = [corner(x0, y0), corner(x0 + FRAME, y0), corner(x0, y0 + FRAME), corner(x0 + FRAME, y0 + FRAME)];
+    const fw = frame.width, fh = frame.height; // any frame size, bottom-centre anchored
+    const x0 = sx - fw / 2, y0 = sy - fh;
+    const pts = [corner(x0, y0), corner(x0 + fw, y0), corner(x0, y0 + fh), corner(x0 + fw, y0 + fh)];
     const qp = f.quad.geometry.getAttribute('position') as THREE.BufferAttribute;
     pts.forEach((p, k) => qp.setXYZ(k, p.x, p.y, p.z));
     qp.needsUpdate = true;

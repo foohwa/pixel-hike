@@ -1,0 +1,80 @@
+{
+ "tent": {
+  "height": 11,
+  "frames": 1,
+  "alignX": "center",
+  "fill": 0.4,
+  "colors": [
+   "ink",
+   "ink2",
+   "coral",
+   "wine",
+   "yellow"
+  ],
+  "remap": {
+   "coral": "orange",
+   "wine": "coral"
+  }
+ },
+ "campfire": {
+  "height": 10,
+  "frames": 2,
+  "alignX": "center",
+  "bgThreshold": 80,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "rockDark",
+   "rock",
+   "red",
+   "coral",
+   "orange",
+   "yellow",
+   "cream"
+  ],
+  "remap": {
+   "red": "coral",
+   "coral": "orange",
+   "orange": "yellow",
+   "yellow": "cream"
+  }
+ },
+ "aid": {
+  "height": 14,
+  "frames": 1,
+  "alignX": "center",
+  "fill": 0.35,
+  "bgThreshold": 90,
+  "colors": [
+   "ink",
+   "night",
+   "dusk",
+   "sky",
+   "skyLight",
+   "red",
+   "white",
+   "greyLight",
+   "skin",
+   "brownDark",
+   "rockDark"
+  ],
+  "outline": false,
+  "keepInk": true
+ },
+ "bench": {
+  "height": 12,
+  "frames": 1,
+  "alignX": "center",
+  "fill": 0.35,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "cream"
+  ],
+  "outline": false,
+  "keepInk": true
+ }
+}

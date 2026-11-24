@@ -1,0 +1,134 @@
+{
+ "macaque": {
+  "height": 11,
+  "frames": 2,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "skin"
+  ]
+ },
+ "tapir": {
+  "height": 12,
+  "frames": 2,
+  "colors": [
+   "ink2",
+   "night",
+   "white",
+   "greyLight"
+  ]
+ },
+ "ibex": {
+  "height": 15,
+  "frames": 2,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "rockDark",
+   "rock",
+   "cream"
+  ]
+ },
+ "deer": {
+  "height": 15,
+  "frames": 2,
+  "idle": 1,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "cream",
+   "white"
+  ],
+  "fill": 0.3
+ },
+ "marmot": {
+  "height": 11,
+  "frames": 2,
+  "idle": 1,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "cream"
+  ]
+ },
+ "rabbit": {
+  "height": 11,
+  "frames": 2,
+  "idle": 1,
+  "fill": 0.32,
+  "colors": [
+   "ink",
+   "rockDark",
+   "rock",
+   "white",
+   "brownDark"
+  ]
+ },
+ "hornbill": {
+  "height": 11,
+  "frames": 2,
+  "alignX": "right",
+  "alignY": "center",
+  "fill": 0.35,
+  "colors": [
+   "ink",
+   "ink2",
+   "white",
+   "yellow",
+   "orange"
+  ]
+ },
+ "eagle": {
+  "height": 9,
+  "frames": 2,
+  "alignX": "right",
+  "alignY": "center",
+  "fill": 0.35,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "cream",
+   "yellow"
+  ]
+ },
+ "hawk": {
+  "height": 9,
+  "frames": 2,
+  "alignX": "right",
+  "alignY": "center",
+  "fill": 0.35,
+  "colors": [
+   "ink",
+   "brownDark",
+   "brown",
+   "tan",
+   "cream"
+  ]
+ },
+ "parrot": {
+  "height": 8,
+  "frames": 2,
+  "alignX": "right",
+  "alignY": "center",
+  "fill": 0.35,
+  "colors": [
+   "ink",
+   "forest",
+   "green",
+   "greenLight",
+   "lime",
+   "red",
+   "cream"
+  ]
+ }
+}

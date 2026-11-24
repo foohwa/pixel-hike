@@ -79,13 +79,62 @@ Image models are bad at exact grids, so make **one frame per image** and assembl
    starting canvas: it downloads the current character's sheet at 8×, so you can paint over it.
 5. Load it with **Use my sprite sheet…** in the Character panel.
 
-## Props (code-drawn today, same palette; good next targets for generated art)
+## Wildlife and props from Grok Imagine
+
+The animals (hornbill, macaques, tapir, parrots, marmot, ibex, golden eagle, deer, rabbit, hawk) and the
+2D-map props (camp tent + campfire, aid station, rest bench) are Grok Imagine art, turned into exact
+palette sprites by [`scripts/grok-sprites.mjs`](../scripts/grok-sprites.mjs):
+
+![wildlife](sprites/wild-preview.png)
+![props](sprites/props-preview.png)
+
+- Sources: `art/grok/wild/*.jpg` and `art/grok/props/*.jpg` — 2 frames side by side (or stacked) on a flat
+  magenta background. Settings per sprite in `art/grok/<group>/sprites.json` (target height, allowed
+  colours, `remap`, `fill`, anchor; see the script header).
+- `node scripts/grok-sprites.mjs wild` → `src/wildart.ts` (+ `docs/sprites/wild-preview.png`);
+  `node scripts/grok-sprites.mjs props` → `src/propsart.ts`. Both are char maps like the hand-made sprites,
+  so flipping, fades and night tints work unchanged; the hand-made frames stay as fallbacks.
+- Prompt pattern that works: *"Pixel art sprite sheet for a retro 16-bit game: two animation frames side
+  by side of a <animal>, full body side view, both frames facing right. <colours>. Frame 1: <pose>.
+  Frame 2: <pose>. Each frame is a 16x16 pixel sprite scaled up with big crisp square pixels, 1-pixel dark
+  navy outline, flat colours, no anti-aliasing, no gradients, no shading, no ground, no shadow, no text.
+  Solid flat magenta background (#FF00FF)."* Say "no rocks / no grass" or Grok adds a base.
+
+## Character pack (your own character, from a photo)
+
+The standard sprite is 16 px — too small for a likeness. A **character pack** is your character in two
+sizes, in one PNG: *Character → Character pack…* (saved with the track's edits). It replaces the character
+everywhere: about **28 px** on the trail (2D and 3D — in 3D it's drawn crisp on top, with its shadow in the
+scene) and about **64 px** in the start / finish arch scenes (the countdown and FINISHER! move up above the
+arch) and on the poster. Its colours are used as they are, not snapped to the 32-colour palette.
+
+- **Layout:** 320 px wide, rows in the standard order (idle, walk, run, climb, descend, cheer, rest, sleep),
+  up to 4 frames per row, facing right, feet on each cell's bottom edge, centred, empty cells left out.
+  y 0–640: big frames in 80 × 80 cells; y 640–960: trail frames in 40 × 40 cells (left half). So 320 × 960
+  (or 320 × 640 for close-ups only), or an exact integer upscale. A missing row borrows a near one
+  (climb → walk, sleep → rest…). The head-lamp pixel is found automatically (brightest warm pixel up top).
+- **Making one with Grok Imagine:** crop the photo to just you, paste it into Imagine with *"this runner as a
+  pixel art game character, two frames side by side, full body side view facing right: standing idle /
+  running, cute chibi proportions, <your kit>, 1-pixel dark navy outline, flat colours, solid flat magenta
+  background"*. Then edit that result once per animation — *"same character… walking: contact / passing"*,
+  *"…up a steep slope"*, *"…down a steep slope, arms out for balance"*, *"…sitting resting / drinking"*,
+  *"…asleep in a sleeping bag, head on the right"*, *"…jumping with both arms raised / landed, arms up"* —
+  always asking for *"no ground, no rock"* so nothing is drawn under you.
+- **Converting:** put the downloads in `art/grok/me/` (git-ignored — it's your likeness) with a
+  `sprites.json`: per image its `rows` and a `cell` (source px per big-sprite px; ~15.5 gives 64 px — use a
+  smaller one if Grok drew that pose smaller, as it did for sleeping), plus `"alignY": "shared"`,
+  `"palette": false`, `"sample": "centre"`, `"outline": false`; lower `bgThreshold` if a colour close to the
+  background (a coral sleeping bag on pink) gets cut out. Then
+  `node scripts/grok-sprites.mjs me --big art/grok/me/pack.png`. The trail frames are made from the same
+  images at `cell × 2.35` with a majority vote, an ink outline and a rule that keeps small dark details
+  (eyes) — `trailScale`, `trailDetail` tune it.
+
+## Props still drawn in code
 
 | Prop | Size | Notes |
 |---|---|---|
 | Flag (start, summit, peak, viewpoint, finish) | 8 × 16 | Raised when reached; finish is checkered |
-| Tent (camp) | 9 × 7 | Plus an 8 × 6 campfire, 2 frames |
-| Aid-station canopy (race checkpoint) | 11 × 7 | Striped roof |
-| Rest sign | 7 × 7 | Wooden board |
+| Aid-station canopy without the volunteer (signs off) | 11 × 7 | Striped roof |
+| Summit signboard | text | Name + height are typed in, so it stays code-drawn |
 | Sun | 7 × 7 | HUD dial and sky |
 | Moon | 7 × 7 | Drawn in code with the real moon phase |

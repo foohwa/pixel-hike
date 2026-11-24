@@ -153,6 +153,11 @@
             <button id="template" class="mini" title="64×128 sheet in the Pixel Hike standard (8× upscaled)">Template PNG</button>
             <button id="resetSheet" class="mini" hidden>Reset</button>
           </div>
+          <div class="row small" title="Your own character in two sizes, e.g. made with Grok Imagine from a finish photo (320×960 PNG: all 8 animations as 80 px cells for the start / finish arch scenes and the poster, then as 40 px cells for the trail; see docs/SPRITE_SPEC.md). Replaces the character on the trail too; saved with this track's edits.">
+            <label class="link">Character pack&hellip;<input type="file" id="bigFile" accept="image/png" hidden /></label>
+            <canvas id="bigPreview" width="1" height="1" hidden></canvas>
+            <button id="bigRemove" class="mini" hidden>Remove</button>
+          </div>
         </div>
 
         <div class="field">

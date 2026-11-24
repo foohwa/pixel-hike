@@ -1,3 +1,4 @@
+import { bigFrameOf, type BigSet } from './bighero';
 import { frameOf, type SpriteSet } from './characters';
 import { drawText, textWidth } from './font';
 import type { LogoSet } from './logo';
@@ -26,6 +27,8 @@ export interface PosterInput {
   /** Leave the date off the subtitle (just the activity). */
   showDate?: boolean;
   hero: SpriteSet;
+  /** Detailed hero (bighero.ts): cheers on the poster instead of the 16 px sprite. */
+  big?: BigSet | null;
   logo: LogoSet | null;
   /** Small pixel versions of up to 4 photos. */
   photos: HTMLCanvasElement[];
@@ -103,6 +106,14 @@ export function drawPoster(p: PosterInput): HTMLCanvasElement | null {
     if (!pt?.visible || pt.x < 2 || pt.x > mw - 2 || pt.y < 16 || pt.y > mh) continue;
     drawFlag(ctx, mx + pt.x, my + pt.y, KIND_COLOR[cp.kind], 1, cp.d * 0.01, cp.kind === 'finish');
   }
+  // the big hero (bighero.ts) cheers in front of the diorama, feet on its bottom-right edge
+  const big = bigFrameOf(p.big, 'cheer', 0.3);
+  const bx = big ? mx + mw - big.width - 2 : 0, by = big ? my + mh - big.height : 0;
+  if (big) {
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(bx + Math.round(big.width / 2) - 9, my + mh - 2, 18, 2);
+    ctx.drawImage(big, bx, by);
+  }
   const top = p.checkpoints.filter((cp) => cp.enabled && cp.kind === 'summit')[0];
   const tp = top && snap.points.get(top.id);
   if (top && tp?.visible) {
@@ -110,7 +121,10 @@ export function drawPoster(p: PosterInput): HTMLCanvasElement | null {
     while (name.length > 4 && textWidth(name) > 90) name = name.slice(0, -1);
     const label = `${name} ${Math.round(top.ele).toLocaleString('en-US')}M`;
     const lw = textWidth(label) + 6;
-    const lx = clamp(mx + tp.x - lw / 2, mx + 2, mx + mw - lw - 2), ly = clamp(my + tp.y - 29, my + 2, my + mh - 12);
+    let lx = clamp(mx + tp.x - lw / 2, mx + 2, mx + mw - lw - 2);
+    const ly = clamp(my + tp.y - 29, my + 2, my + mh - 12);
+    // keep the name tag clear of the big hero (it's drawn on top, so it would cover an arm at worst)
+    if (big && ly + 11 > by + 4 && lx + lw > bx + 4) lx = Math.max(mx + 2, bx + 4 - lw);
     box(ctx, Math.round(lx), Math.round(ly), lw, 11, C.cream, C.ink);
     drawText(ctx, label, Math.round(lx) + 3, Math.round(ly) + 2, C.wine);
   }
@@ -187,9 +201,11 @@ export function drawPoster(p: PosterInput): HTMLCanvasElement | null {
 
   // footer: the character cheering, the app name, the event logo
   const fy = H - 8;
-  ctx.drawImage(frameOf(p.hero, 'cheer', 0.3, false), mx, fy - 16);
-  drawText(ctx, 'PIXEL', mx + 20, fy - 12, C.yellow);
-  drawText(ctx, 'HIKE', mx + 20 + textWidth('PIXEL ') , fy - 12, C.skyLight);
+  const tx = big ? mx : mx + 20; // with the big hero up on the map, the footer needs no little one
+  const small = frameOf(p.hero, 'cheer', 0.3, false);
+  if (!big) ctx.drawImage(small, mx + 8 - small.width / 2, fy - small.height);
+  drawText(ctx, 'PIXEL', tx, fy - 12, C.yellow);
+  drawText(ctx, 'HIKE', tx + textWidth('PIXEL '), fy - 12, C.skyLight);
   if (p.logo) {
     const img = p.logo.get(Math.min(18, Math.floor(60 / p.logo.aspect)), true);
     ctx.drawImage(img, mx + mw - img.width, fy - img.height);

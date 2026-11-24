@@ -1,5 +1,6 @@
 import './style.css';
 import { DEFAULT_TRACK, decodeFile, loadTrack, PreviewPlayer, renderSoundtrack, TRACKS, audioContext } from './audio';
+import { loadBigSheet, type BigSet } from './bighero';
 import { builtInSet, frameOf, KORGA_LOOK, loadSheet, renderSheet, type CharacterId, type Gender, type Look, type SpriteSet } from './characters';
 import { C, type ColorName } from './palette';
 import { loadDem } from './dem';
@@ -73,6 +74,9 @@ const ui = {
   charPreview: $<HTMLCanvasElement>('charPreview'),
   lookEditor: $('lookEditor'),
   sheet: $<HTMLInputElement>('sheet'),
+  bigFile: $<HTMLInputElement>('bigFile'),
+  bigPreview: $<HTMLCanvasElement>('bigPreview'),
+  bigRemove: $<HTMLButtonElement>('bigRemove'),
   template: $<HTMLButtonElement>('template'),
   resetSheet: $<HTMLButtonElement>('resetSheet'),
   mode: $('mode'),
@@ -165,6 +169,7 @@ const state = {
   look: { ...KORGA_LOOK } as Look,
   companion: null as CharacterId | null,
   customSheet: null as SpriteSet | null,
+  big: null as BigSet | null,
   customMusic: null as { name: string; buffer: AudioBuffer } | null,
   logoSource: null as LogoSource | null,
   logoSet: null as LogoSet | null,
@@ -302,7 +307,7 @@ function ensureWeather(): Promise<void> {
 }
 
 function heroSet(): SpriteSet {
-  return state.customSheet ?? builtInSet(state.character, state.gender, state.look);
+  return state.big?.trail ?? state.customSheet ?? builtInSet(state.character, state.gender, state.look);
 }
 
 function gateOptions(): GateOptions | null {
@@ -383,6 +388,7 @@ function rebuild() {
     tzOffsetMin: Number(ui.tz.value || 0),
     activity: state.activity,
     hero: heroSet(),
+    big: state.big,
     pet: state.companion ? builtInSet(state.companion) : null,
     logo: state.logoSet
       ? { set: state.logoSet, intro: ui.logoIntro.checked, badge: ui.logoBadge.checked, outro: ui.logoOutro.checked }
@@ -617,6 +623,7 @@ function collectSettings() {
     music: ui.music.value === 'custom' ? 'auto' : ui.music.value, // uploaded files aren't stored
     volume: Number(ui.volume.value),
     logo: state.logoSource?.dataUrl ?? null, // small, background-free PNG
+    big: state.big?.dataUrl ?? null, // character pack PNG (bighero.ts)
     logoIntro: ui.logoIntro.checked,
     logoBadge: ui.logoBadge.checked,
     logoOutro: ui.logoOutro.checked,
@@ -686,10 +693,36 @@ function applySettings(s: Record<string, unknown>) {
   if (typeof s.zoneAt2 === 'number') ui.zoneAt2.value = String(s.zoneAt2);
   if (s.photoColors === 'palette' || s.photoColors === 'full') ui.photoColors.value = s.photoColors;
   if (typeof s.weather === 'string' && ['real', 'clear', 'drizzle', 'rain', 'storm'].includes(s.weather)) ui.weather.value = s.weather;
+  if ('big' in s) {
+    const url = typeof s.big === 'string' ? s.big : null;
+    if (url !== (state.big?.dataUrl ?? null)) void setBig(url);
+  }
   if ('logo' in s) {
     const url = typeof s.logo === 'string' ? s.logo : null;
     if (url !== (state.logoSource?.dataUrl ?? null)) void setLogo(url ? { dataUrl: url } : null);
   }
+}
+
+// ------------------------------------------------------------------ big hero (start / finish close-ups, poster)
+
+async function setBig(dataUrl: string | null) {
+  try {
+    state.big = dataUrl ? await loadBigSheet(dataUrl) : null;
+  } catch (e) {
+    state.big = null;
+    setStatus((e as Error).message, true);
+    setTimeout(() => setStatus(''), 4000);
+  }
+  ui.bigRemove.hidden = ui.bigPreview.hidden = !state.big;
+  const f = state.big && (state.big.frames.cheer ?? state.big.frames.idle ?? state.big.frames.run)?.[0];
+  if (f) {
+    ui.bigPreview.width = f.width;
+    ui.bigPreview.height = f.height;
+    const ctx = ui.bigPreview.getContext('2d')!;
+    ctx.clearRect(0, 0, f.width, f.height);
+    ctx.drawImage(f, 0, 0);
+  }
+  rebuild();
 }
 
 // ------------------------------------------------------------------ event logo
@@ -1288,6 +1321,14 @@ ui.sheet.onchange = async () => {
   }
   ui.sheet.value = '';
 };
+ui.bigFile.onchange = async () => {
+  const f = ui.bigFile.files?.[0];
+  ui.bigFile.value = '';
+  if (!f) return;
+  const url = await new Promise<string>((ok) => { const r = new FileReader(); r.onload = () => ok(r.result as string); r.readAsDataURL(f); });
+  await setBig(url);
+};
+ui.bigRemove.onclick = () => void setBig(null);
 ui.resetSheet.onclick = () => { state.customSheet = null; ui.resetSheet.hidden = true; rebuild(); };
 ui.template.onclick = () => {
   download(renderSheet(heroSet(), 8).toDataURL('image/png'), `pixel-hike-${state.character}-${state.gender}-sheet-8x.png`);
@@ -1453,7 +1494,7 @@ async function makePoster() {
   }
   const small = drawPoster({
     renderer, track: state.track, checkpoints: state.checkpoints, title: ui.title.value || 'My Hike', activity: state.activity,
-    tzOffsetMin: Number(ui.tz.value || 0), showDate: ui.showDate.checked, hero: heroSet(), logo: state.logoSet, photos: thumbs,
+    tzOffsetMin: Number(ui.tz.value || 0), showDate: ui.showDate.checked, hero: heroSet(), big: state.big, logo: state.logoSet, photos: thumbs,
   });
   renderer.renderAt(state.t);
   return small && upscale(small, 5);
@@ -1544,7 +1585,8 @@ function frame(now: number) {
   previewCtx.clearRect(0, 0, 64, 16);
   const walkAnim = state.activity === 'trailrun' ? 'run' : 'walk';
   if (state.companion) previewCtx.drawImage(frameOf(builtInSet(state.companion), walkAnim, secs + 0.13, false), 14, 0);
-  previewCtx.drawImage(frameOf(heroSet(), walkAnim, secs, false), 30, 0);
+  const hf = frameOf(heroSet(), walkAnim, secs, false), hk = 16 / Math.max(16, heroSet().size ?? 16); // fit the 16 px strip
+  previewCtx.drawImage(hf, 38 - (hf.width * hk) / 2, 16 - hf.height * hk, hf.width * hk, hf.height * hk);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -1648,6 +1690,8 @@ Object.assign(window, {
       ui.logoColors.value = colors;
       await setLogo(await prepareLogo(await (await fetch(url)).blob()));
     },
+    /** Big hero sheet (bighero.ts) from a URL or data URL; null removes it. */
+    setBig(url: string | null) { return setBig(url); },
     setDuration(s: number) { ui.duration.value = String(s); rebuild(); },
     setEnv(e: { scenery?: string; clouds?: boolean; life?: boolean; signs?: boolean; splits?: boolean; light?: boolean }) {
       if (e.light != null) ui.envLight.checked = e.light;

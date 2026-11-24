@@ -1,9 +1,11 @@
-import { frameOf, type Anim, type SpriteSet, type View } from './characters';
+import { frameOf, headLift, type Anim, type SpriteSet, type View } from './characters';
 import { drawGateScene, drawMiniArch, type GateOptions } from './gate';
 import type { LogoSet } from './logo';
 import { drawText, textWidth } from './font';
 import { C, PALETTE, rgb01 } from './palette';
 import type { SkyState } from './sky';
+import { PROPS_ART } from './propsart';
+import type { BigSet } from './bighero';
 import { AID, CAMPFIRE, drawFlag, drawMoon, drawSprite, HEART, MOON, MOUNTAIN, STOPWATCH, SUN, TENT, THERMO } from './sprites';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, sampleAt, type Activity, type Checkpoint, type Track } from './track';
@@ -67,6 +69,7 @@ export interface OverlayInput {
   title: string;
   tzOffsetMin: number;
   hero: SpriteSet;
+  big: BigSet | null;
   heroAt: ScreenPoint;
   facingLeft: boolean;
   pet: SpriteSet | null;
@@ -86,6 +89,8 @@ export interface OverlayInput {
   map: MapFrame | null;
   /** The walker + companion are drawn in the 3D scene (hero3d.ts), not here. */
   heroInScene: boolean;
+  /** The walker is in the 3D scene only as a shadow; its sprite is drawn here (character packs). */
+  heroOnTop?: boolean;
   /** How the camera sees the walker (the head-lamp only shows from the side and front). */
   heroView: View;
   /** Checkpoints built into the 3D scene (sites3d.ts): no sprite for these. */
@@ -136,7 +141,7 @@ export function drawOverlay(o: OverlayInput) {
 
   if (o.gate && (o.state.phase === 'gateStart' || o.state.phase === 'gateFinish')) {
     drawGateScene({
-      ctx, W, H, state: o.state, sky: o.sky, gate: o.gate, hero: o.hero, pet: o.pet,
+      ctx, W, H, state: o.state, sky: o.sky, gate: o.gate, hero: o.hero, big: o.big, pet: o.pet,
       logo: o.logo?.set ?? null, track: o.track, activity: o.activity, tzOffsetMin: o.tzOffsetMin,
     });
     return;
@@ -152,7 +157,7 @@ export function drawOverlay(o: OverlayInput) {
   drawToasts(o);
   drawBanner(o);
   drawSpeech(o);
-  if (o.photo) drawPolaroid(ctx, o.photo.art, o.photo.caption, o.photo.u, W, H, o.heroAt);
+  if (o.photo) drawPolaroid(ctx, o.photo.art, o.photo.caption, o.photo.u, W, H, { ...o.heroAt, y: o.heroAt.y - headLift(o.hero) });
   drawTitleCard(o);
   drawOutroCard(o);
 }
@@ -163,7 +168,8 @@ function drawSpeech(o: OverlayInput) {
   // a checkpoint banner across the top? then the bubble goes beside the walker
   const lr = o.state.lastReached;
   const banner = !!lr && lr.cp.kind !== 'start' && (o.state.phase === 'pause' ? o.state.pauseCp === lr.cp : o.state.t - lr.t < 0.35);
-  for (const b of o.bubbles) drawBubble(o.ctx, b.text, h.x, h.y, o.state.t - b.t, o.W, o.H, banner);
+  const hy = h.y - headLift(o.hero); // bubbles sit above the head, however tall the figure
+  for (const b of o.bubbles) drawBubble(o.ctx, b.text, h.x, hy, o.state.t - b.t, o.W, o.H, banner);
 }
 
 // ---------------------------------------------------------------- animation choice
@@ -510,17 +516,27 @@ function drawWorldSprites(o: OverlayInput) {
     }
     switch (cp.kind) {
       // props sit just beside the trail so the characters don't cover them
-      case 'camp':
-        drawSprite(ctx, TENT, p.x + 3, p.y - 7);
-        drawSprite(ctx, CAMPFIRE[Math.floor(t * 6) % 2], p.x + 13, p.y + 1);
+      case 'camp': {
+        const tent = PROPS_ART.tent, fire = PROPS_ART.campfire;
+        if (tent) drawSprite(ctx, tent.frames[0], p.x + 1, p.y - 7, { keys: tent.keys });
+        else drawSprite(ctx, TENT, p.x + 3, p.y - 7);
+        if (fire) drawSprite(ctx, fire.frames[Math.floor(t * 6) % fire.frames.length], p.x + 14, p.y + 1, { keys: fire.keys });
+        else drawSprite(ctx, CAMPFIRE[Math.floor(t * 6) % 2], p.x + 13, p.y + 1);
         break;
-      case 'rest':
-        drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
+      }
+      case 'rest': {
+        const bench = PROPS_ART.bench;
+        if (bench) drawSprite(ctx, bench.frames[0], p.x + 13, p.y + 1, { keys: bench.keys });
+        else drawSprite(ctx, REST_SIGN, p.x + 13, p.y, { keys: SIGN_KEYS });
         break;
-      case 'cp':
-        if (o.env.signs) drawSprite(ctx, AID_TENT, p.x + 17, p.y + 1, { keys: AID_KEYS });
+      }
+      case 'cp': {
+        const aid = PROPS_ART.aid;
+        if (o.env.signs && aid) drawSprite(ctx, aid.frames[0], p.x + 17, p.y + 1, { keys: aid.keys });
+        else if (o.env.signs) drawSprite(ctx, AID_TENT, p.x + 17, p.y + 1, { keys: AID_KEYS });
         else drawSprite(ctx, AID, p.x + 15, p.y);
         break;
+      }
       default: {
         if (o.env.signs && (cp.kind === 'summit' || cp.kind === 'peak')) {
           // the summit signboard: small from afar, full size with name + height while you're standing there
@@ -547,27 +563,32 @@ function drawWorldSprites(o: OverlayInput) {
     const p = o.petAt;
     ctx.fillStyle = C.ink;
     ctx.fillRect(p.x - 4, p.y - 1, 9, 2);
-    ctx.drawImage(frameOf(o.pet, anim, t + 0.13, o.petFacingLeft), p.x - 8, p.y - 16);
+    const pf = frameOf(o.pet, anim, t + 0.13, o.petFacingLeft);
+    ctx.drawImage(pf, p.x - pf.width / 2, p.y - pf.height);
   }
 
   const h = o.heroAt;
   if (!h.visible) return;
-  if (!o.heroInScene) {
-    ctx.fillStyle = C.ink;
-    ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
+  if (!o.heroInScene || o.heroOnTop) {
+    if (!o.heroInScene) {
+      ctx.fillStyle = C.ink;
+      ctx.fillRect(h.x - 4, h.y - 1, 9, 2);
+    }
     const f = frameOf(o.hero, anim, o.heroT, o.facingLeft);
-    ctx.drawImage(o.effort.tint && o.effort.k > 0 ? tintFrame(f, o.effort.tint, o.effort.k) : f, h.x - 8, h.y - 16);
+    ctx.drawImage(o.effort.tint && o.effort.k > 0 ? tintFrame(f, o.effort.tint, o.effort.k) : f, h.x - f.width / 2, h.y - f.height);
   }
-  drawEffortFx(ctx, o.effort, h.x, h.y, t, o.facingLeft);
+  const lift = headLift(o.hero); // head-anchored effects move up for a taller figure
+  drawEffortFx(ctx, o.effort, h.x, h.y - lift, t, o.facingLeft);
 
   // head-lamp sparkle at night
   const front = o.heroView === 'front' && o.hero.views?.front[anim];
   const behind = (o.heroView === 'back' && o.hero.views?.back[anim]) || (o.heroView === 'back3' && o.hero.views?.back3[anim]);
   const lampAt = behind ? null : front ? o.hero.views!.lampFront : o.hero.lamp;
   if (lampAt && o.sky.lamp > 0.5 && anim !== 'sleep' && state.phase !== 'outro') {
-    const lx = !front && o.facingLeft ? 15 - lampAt[0] : lampAt[0];
+    const lf = frameOf(o.hero, anim, o.heroT, o.facingLeft);
+    const lx = !front && o.facingLeft ? lf.width - 1 - lampAt[0] : lampAt[0];
     ctx.fillStyle = Math.floor(t * 4) % 2 ? C.cream : C.yellow;
-    ctx.fillRect(h.x - 8 + lx, h.y - 16 + lampAt[1], 1, 1);
+    ctx.fillRect(h.x - lf.width / 2 + lx, h.y - lf.height + lampAt[1], 1, 1);
   }
 
   // zZz while sleeping at camp
@@ -575,7 +596,7 @@ function drawWorldSprites(o: OverlayInput) {
     for (let k = 0; k < 2; k++) {
       const uu = (t * 0.6 + k / 2) % 1;
       if (uu > 0.85) continue;
-      drawText(ctx, 'Z', h.x + 4 + uu * 8, h.y - 14 - uu * 16, C.white, { shadow: C.ink });
+      drawText(ctx, 'Z', h.x + 4 + uu * 8, h.y - 14 - lift / 2 - uu * 16, C.white, { shadow: C.ink });
     }
   }
 
@@ -592,7 +613,7 @@ function drawWorldSprites(o: OverlayInput) {
         const vx = (rnd() - 0.5) * 70;
         const vy = -40 - rnd() * 50;
         const px = h.x + vx * age;
-        const py = h.y - 10 + vy * age + 60 * age * age;
+        const py = h.y - 10 - lift + vy * age + 60 * age * age;
         ctx.fillStyle = colors[k % colors.length];
         ctx.fillRect(Math.round(px), Math.round(py), k % 3 === 0 ? 2 : 1, 1);
       }
@@ -1012,8 +1033,9 @@ function drawFireflies(o: OverlayInput) {
     const blink = (t * 0.9 + k * 0.37) % 1;
     if (blink > 0.55) continue;
     const fx = h.x + Math.sin(t * 0.6 + ph) * (18 + k * 3) + Math.sin(t * 1.7 + ph * 2) * 4;
-    const fy = h.y - 8 + Math.cos(t * 0.5 + ph * 1.3) * (9 + (k % 3) * 4);
-    if (Math.abs(fx - h.x) < 6 && fy > h.y - 17 && fy < h.y + 1) continue; // not on the hiker
+    const fy = h.y - 8 - headLift(o.hero) / 2 + Math.cos(t * 0.5 + ph * 1.3) * (9 + (k % 3) * 4);
+    const half = (o.hero.size ?? 16) / 2 - 2;
+    if (Math.abs(fx - h.x) < half && fy > h.y - (o.hero.size ?? 16) - 1 && fy < h.y + 1) continue; // not on the hiker
     ctx.fillStyle = blink < 0.25 ? C.lime : C.yellow;
     ctx.fillRect(Math.round(fx), Math.round(fy), 1, 1);
   }

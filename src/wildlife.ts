@@ -1,6 +1,8 @@
+import { ATLAS_ART } from './atlasart';
 import { C } from './palette';
 import { sunPosition } from './sky';
 import { clamp, sampleAt, type Checkpoint, type Track } from './track';
+import { WILD_ART } from './wildart';
 import { rng } from './zones';
 
 /**
@@ -27,6 +29,8 @@ interface Species {
   keys: Record<string, string>;
   /** Ground animals: how they leave — 'flee' (run off sideways) or 'stay' (watch you go by). */
   leave?: 'flee' | 'hop' | 'stay';
+  /** Ground animals: how many of the first frames loop while it sits (default all; the rest are for running off). */
+  idle?: number;
 }
 
 const SPECIES: Species[] = [
@@ -103,7 +107,27 @@ const SPECIES: Species[] = [
     frames: [['bbbb.bbbb', '..bbbbb..', '...b.b...'], ['.bbbbbbb.', 'b.bbbbb.b', '...b.b...']],
     keys: { b: C.brown },
   },
+  // single frames from the CC0 Pixel Art Atlas (scripts/atlas-sprites.mjs → src/atlasart.ts)
+  {
+    id: 'pangolin', name: 'PANGOLIN', kind: 'ground', regions: ['seasia'], day: false, night: true, maxEle: 1700, leave: 'stay',
+    ...ATLAS_ART.pangolin,
+  },
+  {
+    id: 'boar', name: 'WILD BOAR', kind: 'ground', regions: ['seasia', 'temperate'], day: true, night: true, maxEle: 2000, leave: 'hop',
+    ...ATLAS_ART.boar,
+  },
+  {
+    id: 'monitor', name: 'MONITOR LIZARD', kind: 'ground', regions: ['seasia'], day: true, night: false, maxEle: 900, leave: 'flee',
+    ...ATLAS_ART.monitor,
+  },
 ];
+
+// Grok Imagine art (scripts/grok-sprites.mjs → src/wildart.ts) replaces the hand-typed frames above
+// where there is some; the hand-typed ones stay as the fallback.
+for (const s of SPECIES) {
+  const art = WILD_ART[s.id];
+  if (art) { s.frames = art.frames; s.keys = art.keys; s.idle = art.idle; }
+}
 
 export interface Encounter {
   species: Species;
@@ -163,7 +187,7 @@ export function groundPose(e: Encounter, rel: number, t: number, px: { x: number
   const u = clamp((rel - leaveAt) / 260, 0, 1); // 0 = sitting … 1 = gone
   if (u >= 1) return null;
   const run = s.leave === 'stay' ? 0 : u;
-  const fr = run > 0 ? Math.floor(t * 8) % s.frames.length : Math.floor(t * 1.5 + e.seed) % s.frames.length;
+  const fr = run > 0 ? Math.floor(t * 8) % s.frames.length : Math.floor(t * 1.5 + e.seed) % (s.idle ?? s.frames.length);
   const hop = s.leave === 'hop' && run > 0 ? -Math.abs(Math.sin(t * 14)) * 3 : 0;
   const away = run * 34 * scale;
   return {
