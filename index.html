@@ -19,121 +19,131 @@
     </header>
 
     <main class="layout">
-      <aside class="panel" id="controls">
+      <aside class="panel" id="controls" aria-label="Settings">
         <label class="drop" id="drop">
-          <input type="file" id="file" accept=".gpx,.fit,application/gpx+xml,application/octet-stream" hidden />
-          <strong>Drop a GPX or FIT file</strong>
-          <small>Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em> or <em>Export as FIT file</em></small>
+          <input type="file" id="file" class="vh" accept=".gpx,.fit,application/gpx+xml,application/octet-stream" />
+          <span class="drop-empty">
+            <strong>Drop a GPX or FIT file</strong>
+            <small>or click to choose one. Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em> or <em>Export as FIT file</em></small>
+            <small class="trust">Your track never leaves this browser.</small>
+          </span>
+          <span class="drop-loaded"><b id="fileName">track.gpx</b><span class="change">Change file</span></span>
         </label>
 
-        <div class="field">
-          <span>Title</span>
-          <input id="title" type="text" maxlength="24" placeholder="My hike" />
+        <div class="recipes" id="recipes" role="group" aria-label="Quick setups">
+          <button type="button" data-r="reel" title="9:16, the 15-second highlight, 720p, with the start / finish arch">Story / Reel<small>9:16 · 15 s</small></button>
+          <button type="button" data-r="film" title="16:9, the whole hike, 1080p">Full film<small>16:9 · full length</small></button>
         </div>
 
-        <div class="field">
-          <span>Event logo</span>
-          <div class="row small">
-            <label class="link">Add logo image&hellip;<input type="file" id="logoFile" accept="image/*" hidden /></label>
-            <canvas id="logoPreview" width="1" height="1" hidden></canvas>
-            <button id="logoRemove" class="mini" hidden>Remove</button>
+        <details class="grp" id="grpStory" open>
+          <summary>Story <span class="sum" id="sumStory"></span></summary>
+          <div class="field">
+            <label for="title">Title</label>
+            <input id="title" type="text" maxlength="24" placeholder="My hike" aria-describedby="titleHint" />
+            <small class="hint" id="titleHint">Up to 24 characters.</small>
           </div>
-          <div class="row small" id="logoOpts" hidden>
-            <label class="check"><input type="checkbox" id="logoIntro" checked /> Intro</label>
-            <label class="check"><input type="checkbox" id="logoBadge" checked /> Corner</label>
-            <label class="check"><input type="checkbox" id="logoOutro" checked /> Finish</label>
-            <select id="logoColors" title="Keep the logo's own colours, or snap them to the game palette">
-              <option value="logo">Logo colours</option>
-              <option value="palette">Game palette</option>
-            </select>
-          </div>
-        </div>
 
-        <div class="field">
-          <span>Activity</span>
-          <div class="seg" id="activity">
-            <button data-v="hike" class="on">Hike</button>
-            <button data-v="camphike">Camp hike</button>
-            <button data-v="trailrun">Trail run</button>
+          <div class="field">
+            <span class="lbl" id="activityLbl">Activity</span>
+            <div class="seg" id="activity" role="group" aria-labelledby="activityLbl">
+              <button data-v="hike" class="on">Hike</button>
+              <button data-v="camphike">Camp hike</button>
+              <button data-v="trailrun">Trail run</button>
+            </div>
           </div>
-        </div>
 
-        <div class="field">
-          <span>Start / finish arch</span>
-          <div class="row">
-            <select id="gateMode" title="Opening and ending scene with a race arch">
-              <option value="auto">Auto (trail run)</option>
+          <div class="field">
+            <span class="lbl">Event logo</span>
+            <div class="row small">
+              <label class="link">Add logo image&hellip;<input type="file" id="logoFile" class="vh" accept="image/*" /></label>
+              <canvas id="logoPreview" width="1" height="1" hidden></canvas>
+              <button id="logoRemove" class="mini" hidden>Remove</button>
+            </div>
+            <div class="row small wrap" id="logoOpts" hidden>
+              <label class="check"><input type="checkbox" id="logoIntro" checked /> Intro</label>
+              <label class="check"><input type="checkbox" id="logoBadge" checked /> Corner</label>
+              <label class="check"><input type="checkbox" id="logoOutro" checked /> Finish</label>
+              <select id="logoColors" aria-label="Logo colours">
+                <option value="logo">Logo colours</option>
+                <option value="palette">Game palette</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="gateMode">Start / finish arch</label>
+            <select id="gateMode">
+              <option value="auto">Auto (on for trail runs)</option>
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <select id="gateColor" title="Arch colour">
-              <option value="red">Red</option>
-              <option value="blue">Blue</option>
-              <option value="orange">Orange</option>
-              <option value="green">Green</option>
-              <option value="black">Black</option>
-            </select>
-          </div>
-          <input id="gateText" type="text" maxlength="28" placeholder="Banner text (defaults to the title)" />
-          <input id="gateTagline" type="text" maxlength="28" placeholder="Tagline, e.g. CAN YOU SURVIVE?" />
-        </div>
-
-        <div class="field">
-          <span>Scenery</span>
-          <select id="scenery" title="Trees and land colours">
-            <option value="auto">Auto (by location)</option>
-            <option value="tropical">Tropical rainforest</option>
-            <option value="alpine">Alpine (treeline, rock, snow)</option>
-            <option value="classic">Classic</option>
-          </select>
-          <div class="row small">
-            <label class="check" title="Valley mist (thickest around sunrise), drifting cloud shadows, clouds in the sky"><input type="checkbox" id="envClouds" checked /> Clouds &amp; mist</label>
-            <label class="check" title="Fireflies on jungle nights, birds at dawn/dusk, head-lamp beam"><input type="checkbox" id="envLife" checked /> Fireflies &amp; birds</label>
-          </div>
-          <label class="check small" title="A few animal encounters picked for where you hiked: hornbills, macaques and tapirs in Southeast Asian rainforest; parrots and monkeys in other tropics; marmots, ibex and eagles up high; deer, rabbits and hawks in temperate woods. Ground animals sit by the trail and dash off as you pass."><input type="checkbox" id="envWild" checked /> Local wildlife</label>
-          <label class="check small" title="Rivers, streams, lakes, roads and dirt tracks from OpenStreetMap (downloads the map area once from OpenFreeMap's OpenStreetMap tiles and keeps it in this browser), with a pop-up when you cross a named river"><input type="checkbox" id="envWater" checked /> Rivers, lakes &amp; roads (OpenStreetMap)</label>
-          <div class="row small">
-            <select id="weather" title="Real weather asks open-meteo.com for the area's hourly weather on the day of the hike (it gets a rough location, rounded to ~10 km, and the dates — nothing else). Kept in this browser afterwards.">
-              <option value="real">Real weather (Open-Meteo)</option>
-              <option value="clear">Always clear</option>
-              <option value="drizzle">Drizzle all the way</option>
-              <option value="rain">Rain all the way</option>
-              <option value="storm">Thunderstorm</option>
-            </select>
-            <small id="weatherInfo" class="hint"></small>
-          </div>
-          <label class="check small" title="Ridges cast shadows from the real sun (peaks light up first at dawn, long shadows in the evening); nights lit by the real moon and its phase"><input type="checkbox" id="envLight" checked /> Real sun &amp; moon light (mountain shadows)</label>
-        </div>
-
-        <details class="field fold" id="zonesFold">
-          <summary>Trail zones <i id="zoneState">off</i></summary>
-          <label class="check"><input type="checkbox" id="zonesOn" /> Decorate the trail by elevation <i class="hint">(experimental)</i></label>
-          <div class="zones" id="zoneRows">
-            <div class="zrow"><em>Low</em><span class="from">from the bottom</span><select id="zoneStyle0"></select></div>
-            <div class="zrow"><em>Mid</em><label class="from">from <input type="number" id="zoneAt1" step="50" min="0" max="9000" /> m</label><select id="zoneStyle1"></select></div>
-            <div class="zrow"><em>High</em><label class="from">from <input type="number" id="zoneAt2" step="50" min="0" max="9000" /> m</label><select id="zoneStyle2"></select></div>
-          </div>
-          <div class="row small">
-            <label class="check" title="Fixed ropes, roots and rock steps where the trail is steeper than ~28%"><input type="checkbox" id="zoneTech" checked /> Ropes &amp; roots on steep bits</label>
-            <label class="check"><input type="checkbox" id="zoneLabels" checked /> Zone names</label>
-          </div>
-          <div class="row small">
-            <small id="zoneSummary" class="hint"></small>
-            <button id="zoneReset" class="mini" title="Back to the suggested heights for this track">Reset</button>
+            <div class="sub" id="gateOpts">
+              <select id="gateColor" aria-label="Arch colour">
+                <option value="red">Red arch</option>
+                <option value="blue">Blue arch</option>
+                <option value="orange">Orange arch</option>
+                <option value="green">Green arch</option>
+                <option value="black">Black arch</option>
+              </select>
+              <input id="gateText" type="text" maxlength="28" placeholder="Banner text (defaults to the title)" aria-label="Arch banner text" />
+              <input id="gateTagline" type="text" maxlength="28" placeholder="Tagline, e.g. CAN YOU SURVIVE?" aria-label="Arch tagline" />
+            </div>
           </div>
         </details>
 
-        <div class="field">
-          <span>Character</span>
-          <div class="seg" id="character">
+        <details class="grp" id="grpVideo" open>
+          <summary>Video <span class="sum" id="sumVideo"></span></summary>
+          <div class="field">
+            <span class="lbl" id="modeLbl">View</span>
+            <div class="seg" id="mode" role="group" aria-labelledby="modeLbl">
+              <button data-v="3d" class="on">3D</button>
+              <button data-v="2d">2D map</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl" id="aspectLbl">Format</span>
+            <div class="seg" id="aspect" role="group" aria-labelledby="aspectLbl">
+              <button data-v="landscape" class="on">16:9</button>
+              <button data-v="portrait">9:16 story</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl" id="cutLbl">Cut</span>
+            <div class="seg" id="cut" role="group" aria-labelledby="cutLbl">
+              <button data-v="full" class="on">Full video</button>
+              <button data-v="highlight">15 s highlight</button>
+            </div>
+            <small class="hint" id="cutHint">The highlight goes straight to the summit and the finish, for Stories and Reels. The GIF always uses it.</small>
+          </div>
+          <div class="field">
+            <label for="duration">Length <b id="durLabel">45s</b> <i id="speedLabel"></i></label>
+            <input id="duration" type="range" min="20" max="180" step="1" value="45" />
+          </div>
+          <div class="field">
+            <label for="quality">Quality</label>
+            <select id="quality">
+              <option value="4">720p (faster)</option>
+              <option value="6" selected>1080p</option>
+            </select>
+          </div>
+          <div class="field row wrap">
+            <label class="check"><input id="minimap" type="checkbox" checked /> Minimap</label>
+            <label class="check"><input id="showDate" type="checkbox" /> Date on title &amp; poster</label>
+            <select id="tz" aria-label="Time zone for the clock"></select>
+          </div>
+        </details>
+
+        <details class="grp" id="grpCharacter" open>
+          <summary>Character <span class="sum" id="sumCharacter"></span></summary>
+          <div class="seg" id="character" role="group" aria-label="Character">
             <button data-v="hiker" class="on">Hiker</button>
             <button data-v="runner">Runner</button>
-            <button data-v="me" title="Dress the character in your own kit">Me</button>
+            <button data-v="me">Me</button>
             <button data-v="dog">Dog</button>
             <button data-v="cat">Cat</button>
           </div>
           <div class="look" id="lookEditor" hidden></div>
-          <div class="seg" id="gender">
+          <div class="seg" id="gender" role="group" aria-label="Body type">
             <button data-v="male" class="on">Male</button>
             <button data-v="female">Female</button>
           </div>
@@ -145,46 +155,102 @@
                 <option value="cat">cat</option>
               </select>
             </label>
-            <canvas id="charPreview" width="64" height="16" title="Walk cycle preview"></canvas>
+            <canvas id="charPreview" width="64" height="16" role="img" aria-label="Walk cycle preview"></canvas>
           </div>
-          <label class="check small" title="On your hardest stretches (top heart rates of this hike) the character flashes yellow on each heartbeat and sweats; near your max it blinks red like a game character taking damage, puffs and plods. Without heart rate: sweat on steep climbs."><input type="checkbox" id="envEffort" checked /> Heart-rate effects (flash &amp; sweat when working hard)</label>
-          <div class="row small">
-            <label class="link">Use my sprite sheet&hellip;<input type="file" id="sheet" accept="image/png" hidden /></label>
-            <button id="template" class="mini" title="64×128 sheet in the Pixel Hike standard (8× upscaled)">Template PNG</button>
-            <button id="resetSheet" class="mini" hidden>Reset</button>
-          </div>
-          <div class="row small" title="Your own character in two sizes, e.g. made with Grok Imagine from a finish photo (320×960 PNG: all 8 animations as 80 px cells for the start / finish arch scenes and the poster, then as 40 px cells for the trail; see docs/SPRITE_SPEC.md). Replaces the character on the trail too; saved with this track's edits.">
-            <label class="link">Character pack&hellip;<input type="file" id="bigFile" accept="image/png" hidden /></label>
-            <canvas id="bigPreview" width="1" height="1" hidden></canvas>
-            <button id="bigRemove" class="mini" hidden>Remove</button>
-          </div>
-        </div>
+          <label class="check"><input type="checkbox" id="envEffort" checked /> Heart-rate effects</label>
+          <small class="hint">On your hardest stretches the character flashes and sweats; near your max it blinks red.</small>
+        </details>
 
-        <div class="field">
-          <span>View</span>
-          <div class="seg" id="mode">
-            <button data-v="3d" class="on">3D</button>
-            <button data-v="2d">2D map</button>
+        <details class="grp" id="grpMoments" open>
+          <summary>Moments <span class="sum" id="sumMoments"></span></summary>
+          <div class="field">
+            <span class="lbl">Checkpoints <i id="saved" role="status"></i></span>
+            <div class="row small wrap">
+              <label class="check" title="Signboard with the name + height at summits and peaks; aid tents at race checkpoints"><input type="checkbox" id="envSigns" checked /> Summit signs &amp; aid tents</label>
+              <label class="check" title="Distance, climb and time for each leg + a NEXT checkpoint line"><input type="checkbox" id="envSplits" checked /> Leg splits &amp; next stop</label>
+              <label class="check" title="Stops at viewpoints for a look around, names summits after the mapped peak, and marks camps, springs and waterfalls"><input type="checkbox" id="envLandmarks" checked /> Viewpoints &amp; landmarks</label>
+            </div>
+            <ul id="cps" class="cps" aria-label="Checkpoints"><li class="muted">Load a track first.</li></ul>
+            <div class="row">
+              <button id="addCp" class="mini" disabled>+ Add checkpoint here</button>
+              <button id="resetCps" class="mini" disabled title="Forget my checkpoint edits for this track">Reset checkpoints</button>
+            </div>
           </div>
-        </div>
 
-        <div class="field">
-          <span>Format</span>
-          <div class="seg" id="aspect">
-            <button data-v="landscape" class="on">16:9</button>
-            <button data-v="portrait">9:16 story</button>
+          <div class="field">
+            <span class="lbl">Photos</span>
+            <div class="row small">
+              <label class="link">Add photos&hellip;<input type="file" id="photoFile" class="vh" accept="image/*" multiple /></label>
+              <select id="photoColors" aria-label="Photo colours">
+                <option value="palette">Game palette</option>
+                <option value="full">Photo colours</option>
+              </select>
+            </div>
+            <small class="hint">Photos find their spot on the trail by GPS or time taken. The poster shows the first four.</small>
+            <ul id="photos" class="cps moments" aria-label="Photos"></ul>
           </div>
-        </div>
 
-        <div class="field">
-          <span>Length <b id="durLabel">45s</b> <i id="speedLabel"></i></span>
-          <input id="duration" type="range" min="20" max="180" step="1" value="45" />
-        </div>
+          <div class="field">
+            <label for="bubbleText">Speech bubbles</label>
+            <div class="row">
+              <input id="bubbleText" type="text" maxlength="60" placeholder="Say something, e.g. LEECHES!!" />
+              <button id="addBubble" class="mini" disabled title="The character says this where the scrubber is">+ Bubble here</button>
+            </div>
+            <ul id="bubbles" class="cps moments" aria-label="Speech bubbles"></ul>
+          </div>
+        </details>
 
-        <div class="field">
-          <span>Music</span>
+        <details class="grp" id="grpWorld">
+          <summary>World <span class="sum" id="sumWorld"></span></summary>
+          <div class="field">
+            <label for="scenery">Scenery</label>
+            <select id="scenery">
+              <option value="auto">Auto (by location)</option>
+              <option value="tropical">Tropical rainforest</option>
+              <option value="alpine">Alpine (treeline, rock, snow)</option>
+              <option value="classic">Classic</option>
+            </select>
+          </div>
+          <label class="check" title="Valley mist (thickest around sunrise), drifting cloud shadows, clouds in the sky"><input type="checkbox" id="envClouds" checked /> Clouds &amp; mist</label>
+          <label class="check" title="Fireflies on jungle nights, birds at dawn/dusk, head-lamp beam"><input type="checkbox" id="envLife" checked /> Fireflies &amp; birds</label>
+          <label class="check" title="A few animal encounters picked for where you hiked. Ground animals sit by the trail and dash off as you pass."><input type="checkbox" id="envWild" checked /> Local wildlife</label>
+          <label class="check" title="Downloads the map area once from OpenFreeMap's OpenStreetMap tiles and keeps it in this browser"><input type="checkbox" id="envWater" checked /> Rivers, lakes &amp; roads (OpenStreetMap)</label>
+          <label class="check" title="Ridges cast shadows from the real sun; nights lit by the real moon and its phase"><input type="checkbox" id="envLight" checked /> Real sun &amp; moon light</label>
+          <div class="field">
+            <label for="weather">Weather <small id="weatherInfo" class="hint"></small></label>
+            <select id="weather" aria-describedby="weatherHint">
+              <option value="real">Real weather (Open-Meteo)</option>
+              <option value="clear">Always clear</option>
+              <option value="drizzle">Drizzle all the way</option>
+              <option value="rain">Rain all the way</option>
+              <option value="storm">Thunderstorm</option>
+            </select>
+            <small class="hint" id="weatherHint">Real weather sends Open-Meteo a rough location (~10 km) and the dates, nothing else.</small>
+          </div>
+
+          <details class="field fold" id="zonesFold">
+            <summary>Trail zones <i id="zoneState">off</i></summary>
+            <label class="check"><input type="checkbox" id="zonesOn" /> Decorate the trail by elevation <i class="hint">(experimental)</i></label>
+            <div class="zones" id="zoneRows">
+              <div class="zrow"><em>Low</em><span class="from">from the bottom</span><select id="zoneStyle0" aria-label="Low zone style"></select></div>
+              <div class="zrow"><em>Mid</em><label class="from">from <input type="number" id="zoneAt1" step="50" min="0" max="9000" aria-label="Mid zone starts at (m)" /> m</label><select id="zoneStyle1" aria-label="Mid zone style"></select></div>
+              <div class="zrow"><em>High</em><label class="from">from <input type="number" id="zoneAt2" step="50" min="0" max="9000" aria-label="High zone starts at (m)" /> m</label><select id="zoneStyle2" aria-label="High zone style"></select></div>
+            </div>
+            <div class="row small wrap">
+              <label class="check" title="Fixed ropes, roots and rock steps where the trail is steeper than ~28%"><input type="checkbox" id="zoneTech" checked /> Ropes &amp; roots on steep bits</label>
+              <label class="check"><input type="checkbox" id="zoneLabels" checked /> Zone names</label>
+            </div>
+            <div class="row small">
+              <small id="zoneSummary" class="hint"></small>
+              <button id="zoneReset" class="mini" title="Back to the suggested heights for this track">Reset heights</button>
+            </div>
+          </details>
+        </details>
+
+        <details class="grp" id="grpSound">
+          <summary>Sound <span class="sum" id="sumSound"></span></summary>
           <div class="row">
-            <select id="music">
+            <select id="music" aria-label="Music">
               <option value="auto">Auto</option>
               <option value="stage-1">Stage 1</option>
               <option value="stage-2">Stage 2</option>
@@ -193,86 +259,77 @@
               <option value="custom" hidden>My track</option>
               <option value="none">No music</option>
             </select>
-            <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" title="Volume" />
+            <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="Volume" />
           </div>
           <div class="row small">
-            <label class="link">Use my own track&hellip;<input type="file" id="musicFile" accept="audio/*" hidden /></label>
+            <label class="link">Use my own track&hellip;<input type="file" id="musicFile" class="vh" accept="audio/*" /></label>
             <small id="musicCredit" class="credit"></small>
           </div>
-        </div>
+        </details>
 
-        <div class="field row">
-          <label class="check"><input id="minimap" type="checkbox" checked /> Minimap</label>
-          <label class="check" title="Show the hike's date on the title card and the poster"><input id="showDate" type="checkbox" /> Date</label>
-          <select id="tz" title="Time zone for the clock"></select>
-        </div>
-
-        <div class="field">
-          <span>Checkpoints <i id="saved"></i></span>
-          <div class="row small">
-            <label class="check" title="Signboard with the name + height at summits and peaks; aid tents at race checkpoints"><input type="checkbox" id="envSigns" checked /> Summit signs &amp; aid tents</label>
-            <label class="check" title="Distance, climb and time for each leg + a NEXT checkpoint line"><input type="checkbox" id="envSplits" checked /> Splits &amp; next</label>
-            <label class="check" title="Stops at viewpoints for a look around (OpenStreetMap viewpoints beside the trail + the most open high spots on the terrain), names summits after the mapped peak, and marks camps, springs and waterfalls"><input type="checkbox" id="envLandmarks" checked /> Viewpoints &amp; landmarks</label>
+        <details class="grp" id="grpAdvanced">
+          <summary>Advanced <span class="sum">sprites · backup</span></summary>
+          <div class="field">
+            <span class="lbl">Custom character</span>
+            <div class="row small wrap">
+              <label class="link">Use my sprite sheet&hellip;<input type="file" id="sheet" class="vh" accept="image/png" /></label>
+              <button id="template" class="mini" title="64×128 sheet in the Pixel Hike standard (8× upscaled)">Download template</button>
+              <button id="resetSheet" class="mini" hidden>Reset</button>
+            </div>
+            <div class="row small">
+              <label class="link">Character pack&hellip;<input type="file" id="bigFile" class="vh" accept="image/png" /></label>
+              <canvas id="bigPreview" width="1" height="1" hidden></canvas>
+              <button id="bigRemove" class="mini" hidden>Remove</button>
+            </div>
+            <small class="hint">A character pack is your own character as a 320×960 PNG (big cells for the arch and poster, small ones for the trail). See docs/SPRITE_SPEC.md.</small>
           </div>
-          <ul id="cps" class="cps"><li class="muted">Load a track first.</li></ul>
-          <div class="row">
-            <button id="addCp" class="mini" disabled>+ Add checkpoint here</button>
-            <button id="resetCps" class="mini" disabled title="Forget my checkpoint edits for this track">Reset edits</button>
+          <div class="field">
+            <span class="lbl">Backup</span>
+            <div class="row small">
+              <button id="backupCps" class="mini" disabled title="Download your checkpoint names/edits and settings as a file"><i data-icon="save" data-scale="1.5"></i> Back up edits</button>
+              <label class="link" id="restoreLabel">Restore from file&hellip;<input type="file" id="restoreCps" class="vh" accept=".json,application/json" /></label>
+            </div>
           </div>
-          <div class="row small">
-            <button id="backupCps" class="mini" disabled title="Download your checkpoint names/edits and settings as a file">&#11015; Backup edits</button>
-            <label class="link" id="restoreLabel">Restore from file&hellip;<input type="file" id="restoreCps" accept=".json,application/json" hidden /></label>
-          </div>
-        </div>
-
-        <div class="field">
-          <span>Photos &amp; speech bubbles</span>
-          <div class="row small">
-            <label class="link" title="JPEGs from your phone find their own spot on the trail (GPS or time taken). The walker stops, a flash, and the photo drops in as a pixel polaroid.">Add photos&hellip;<input type="file" id="photoFile" accept="image/*" multiple hidden /></label>
-            <select id="photoColors" title="Colours of the pixel polaroids">
-              <option value="palette">Game palette</option>
-              <option value="full">Photo colours</option>
-            </select>
-          </div>
-          <ul id="photos" class="cps moments"></ul>
-          <div class="row">
-            <input id="bubbleText" type="text" maxlength="60" placeholder="Say something, e.g. LEECHES!!" />
-            <button id="addBubble" class="mini" disabled title="The character says this where the scrubber is">+ Bubble here</button>
-          </div>
-          <ul id="bubbles" class="cps moments"></ul>
-        </div>
-
-        <div class="field">
-          <span>Export</span>
-          <div class="seg" id="cut">
-            <button data-v="full" class="on" title="The whole hike, as long as the Length slider says">Full video</button>
-            <button data-v="highlight" title="A 15-second cut: straight to the summit and the finish — for Stories and Reels">15 s highlight</button>
-          </div>
-          <div class="row">
-            <select id="quality">
-              <option value="4">720p</option>
-              <option value="6" selected>1080p</option>
-            </select>
-            <button id="export" class="primary" disabled>Export MP4</button>
-          </div>
-          <div class="row">
-            <button id="gif" class="mini" disabled title="The 15-second highlight as a looping GIF (640×360, or 360×640 in 9:16) for chats">GIF (15 s loop)</button>
-            <button id="poster" class="mini" disabled title="A 1080×1350 PNG of the whole route as a pixel level-map: stats, photos, elevation profile (uses the 3D / 2D view you picked)">&#128444; Poster PNG</button>
-          </div>
-          <progress id="progress" max="1" value="0" hidden></progress>
-          <a id="download" hidden>Download video</a>
-        </div>
+        </details>
       </aside>
 
-      <section class="stage">
+      <section class="stage" id="stage" aria-label="Preview">
         <div class="screen" id="screen">
+          <canvas id="attract" aria-hidden="true"></canvas>
           <canvas id="view"></canvas>
-          <div class="status" id="status">Drop a GPX file to begin</div>
+          <div class="status" id="status" role="status" aria-live="polite">Drop a GPX or FIT file to begin</div>
+
+          <div class="render" id="render" hidden>
+            <b id="renderTitle">Rendering video…</b>
+            <div class="meter" role="progressbar" aria-labelledby="renderTitle" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter"><i id="meterFill"></i></div>
+            <span id="renderInfo">0%</span>
+            <button id="renderCancel" class="mini">Cancel</button>
+          </div>
+
+          <div class="toast" id="toast" role="status" hidden><span id="toastText"></span><button id="toastUndo" class="mini">Undo</button></div>
+          <div class="finish" id="finish" role="dialog" aria-labelledby="finishTitle" hidden>
+            <canvas id="finishArt" role="img" aria-label="Stage clear!"></canvas>
+            <h2 id="finishTitle" class="vh">Stage clear!</h2>
+            <p id="finishInfo"></p>
+            <div class="finish-actions">
+              <button id="finishShare" class="primary" hidden><i data-icon="share"></i> Share</button>
+              <a id="download" class="btn" href="#"><i data-icon="save"></i> Download again</a>
+              <button id="finishPoster"><i data-icon="poster"></i> Make poster</button>
+              <button id="finishClose">Back to editing</button>
+            </div>
+          </div>
         </div>
         <div class="transport">
-          <button id="play" disabled>&#9208;</button>
-          <input id="scrub" type="range" min="0" max="1000" value="0" disabled />
+          <button id="play" disabled aria-label="Play"><i data-icon="play"></i></button>
+          <input id="scrub" type="range" min="0" max="1000" value="0" disabled aria-label="Position in the video" />
           <span id="clock">0.0s</span>
+          <button id="shrink" class="only-narrow" aria-pressed="false" aria-label="Make the preview smaller"><i data-icon="collapse"></i></button>
+        </div>
+        <div class="actions" id="actions">
+          <button id="export" class="primary" disabled><i data-icon="film"></i> Export MP4</button>
+          <button id="gif" disabled title="The 15-second highlight as a looping GIF for chats" aria-label="GIF (15-second loop)"><i data-icon="gif"></i></button>
+          <button id="poster" disabled title="A 1080×1350 PNG of the whole route as a pixel level-map (uses the 3D / 2D view you picked)" aria-label="Poster PNG"><i data-icon="poster"></i><span class="lbl-wide">Poster</span></button>
+          <span class="act-meta" id="actMeta"></span>
         </div>
         <div class="stats" id="stats"></div>
       </section>

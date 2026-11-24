@@ -1,7 +1,7 @@
 import './style.css';
 import { DEFAULT_TRACK, decodeFile, loadTrack, PreviewPlayer, renderSoundtrack, TRACKS, audioContext } from './audio';
 import { loadBigSheet, type BigSet } from './bighero';
-import { builtInSet, frameOf, KORGA_LOOK, loadSheet, renderSheet, type CharacterId, type Gender, type Look, type SpriteSet } from './characters';
+import { builtInSet, CHARACTER_LABEL, frameOf, KORGA_LOOK, loadSheet, renderSheet, type CharacterId, type Gender, type Look, type SpriteSet } from './characters';
 import { C, type ColorName } from './palette';
 import { loadDem } from './dem';
 import type { GateColor, GateOptions } from './gate';
@@ -24,6 +24,9 @@ import {
 import { newId, PHOTO_SECONDS, pixelatePhoto, placePhoto, readPhoto, speakable, type Bubble, type Photo, type PhotoColors } from './moments';
 import { drawPoster, upscale } from './poster';
 import { exportGif } from './gif';
+import { mountIcons, pixelIcon } from './icons';
+import { startAttract } from './attract';
+import { drawText, textWidth } from './font';
 import { loadWeather, weatherSummary, type WeatherMode, type WeatherSeries } from './weather';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
 
@@ -32,6 +35,12 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const ui = {
   drop: $('drop'),
   file: $<HTMLInputElement>('file'),
+  fileName: $('fileName'),
+  recipes: $('recipes'),
+  gateOpts: $('gateOpts'),
+  sum: {
+    story: $('sumStory'), video: $('sumVideo'), character: $('sumCharacter'), moments: $('sumMoments'), world: $('sumWorld'), sound: $('sumSound'),
+  },
   title: $<HTMLInputElement>('title'),
   logoFile: $<HTMLInputElement>('logoFile'),
   logoPreview: $<HTMLCanvasElement>('logoPreview'),
@@ -108,9 +117,27 @@ const ui = {
   gif: $<HTMLButtonElement>('gif'),
   cut: $('cut'),
   export: $<HTMLButtonElement>('export'),
-  progress: $<HTMLProgressElement>('progress'),
+  actMeta: $('actMeta'),
   download: $<HTMLAnchorElement>('download'),
+  stage: $('stage'),
   screen: $('screen'),
+  attract: $<HTMLCanvasElement>('attract'),
+  render: $('render'),
+  renderTitle: $('renderTitle'),
+  meter: $('meter'),
+  meterFill: $('meterFill'),
+  renderInfo: $('renderInfo'),
+  renderCancel: $<HTMLButtonElement>('renderCancel'),
+  finish: $('finish'),
+  finishArt: $<HTMLCanvasElement>('finishArt'),
+  finishInfo: $('finishInfo'),
+  finishShare: $<HTMLButtonElement>('finishShare'),
+  finishPoster: $<HTMLButtonElement>('finishPoster'),
+  finishClose: $<HTMLButtonElement>('finishClose'),
+  shrink: $<HTMLButtonElement>('shrink'),
+  toast: $('toast'),
+  toastText: $('toastText'),
+  toastUndo: $<HTMLButtonElement>('toastUndo'),
   canvas: $<HTMLCanvasElement>('view'),
   status: $('status'),
   play: $<HTMLButtonElement>('play'),
@@ -198,9 +225,13 @@ async function loadFile(f: File) {
     setStatus('Reading track…');
     const parsed: ParsedTrack = /\.fit$/i.test(f.name) ? parseFit(await f.arrayBuffer()) : parseGpx(await f.text());
     await loadParsed(parsed);
+    ui.fileName.textContent = f.name;
+    ui.drop.classList.add('loaded');
+    ui.drop.setAttribute('aria-label', `Track: ${f.name}. Change file`);
   } catch (e) {
     console.error(e);
-    setStatus((e as Error).message || 'Could not read that file.', true);
+    const why = (e as Error).message || 'Could not read that file.';
+    showError(`${why} Pixel Hike needs a GPX or FIT workout (in Suunto: Export GPX workout or Export as FIT file).`);
   }
 }
 
@@ -230,6 +261,8 @@ async function loadParsed(parsed: ParsedTrack) {
 
   state.track = track;
   state.terrain = terrain;
+  ui.attract.hidden = true;
+  ui.canvas.hidden = false;
   state.dem = dem;
   state.checkpoints = [];
   state.tombstones = [];
@@ -271,7 +304,7 @@ async function loadParsed(parsed: ParsedTrack) {
   [ui.play, ui.scrub, ui.export, ui.addCp, ui.resetCps, ui.backupCps, ui.addBubble, ui.poster, ui.gif].forEach((el) => (el.disabled = false));
   renderMoments();
   void refreshPhotoArt();
-  ui.play.innerHTML = '&#9208;';
+  setPlayIcon();
   justRestored = !!saved;
   restoredAt = saved ? performance.now() : -Infinity;
   setStatus(dem ? '' : 'Terrain tiles unavailable — using a stylised ridge.');
@@ -364,6 +397,7 @@ function renderZoneSummary() {
 }
 
 function rebuild() {
+  refreshChrome();
   if (!state.track || !state.terrain) return;
   const gate = gateOptions();
   // scenery decides the trees + land colours, so a change means a new diorama
@@ -456,6 +490,7 @@ function setCharacter(c: CharacterId, rebuildNow = true) {
   state.character = c;
   setSeg(ui.character, c);
   ui.lookEditor.hidden = c !== 'me';
+  ui.gender.hidden = c === 'dog' || c === 'cat';
   if (rebuildNow) rebuild();
 }
 
@@ -486,10 +521,10 @@ function buildLookEditor() {
   el.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'row small';
-  head.innerHTML = '<span class="hint">Your kit (from the KORGA finish photo)</span>';
+  head.innerHTML = '<span class="hint">Dress the character in your own kit, or start from a preset.</span>';
   const preset = document.createElement('button');
   preset.className = 'mini';
-  preset.textContent = 'KORGA kit';
+  preset.textContent = 'KORGA preset';
   preset.title = 'Headlamp, blue-grey tee, black race vest, bib, black shorts, red wristband, grey-green shoes';
   preset.onclick = () => { state.look = { ...KORGA_LOOK }; syncLookEditor(); rebuild(); };
   head.append(preset);
@@ -710,8 +745,7 @@ async function setBig(dataUrl: string | null) {
     state.big = dataUrl ? await loadBigSheet(dataUrl) : null;
   } catch (e) {
     state.big = null;
-    setStatus((e as Error).message, true);
-    setTimeout(() => setStatus(''), 4000);
+    showError((e as Error).message);
   }
   ui.bigRemove.hidden = ui.bigPreview.hidden = !state.big;
   const f = state.big && (state.big.frames.cheer ?? state.big.frames.idle ?? state.big.frames.run)?.[0];
@@ -789,6 +823,7 @@ function renderMoments() {
     cb.type = 'checkbox';
     cb.checked = p.enabled;
     cb.title = 'Show this photo';
+    cb.setAttribute('aria-label', 'Show this photo');
     cb.onchange = () => { p.enabled = cb.checked; rebuild(); };
     const thumb = document.createElement('canvas');
     const art = state.photoArt.get(p.id);
@@ -800,12 +835,14 @@ function renderMoments() {
     cap.type = 'text';
     cap.maxLength = 22;
     cap.placeholder = 'caption (time + km)';
+    cap.setAttribute('aria-label', 'Photo caption');
     cap.value = p.caption;
     cap.oninput = () => { p.caption = cap.value; rebuild(); };
     const move = document.createElement('button');
     move.className = 'here-btn';
     move.textContent = '⌖';
     move.title = 'Move this photo to where the scrubber is';
+    move.setAttribute('aria-label', move.title);
     move.onclick = () => {
       const d = scrubD();
       if (d == null) return flash('Scrub to a point along the trail first.');
@@ -818,8 +855,16 @@ function renderMoments() {
     del.className = 'del';
     del.textContent = '✕';
     del.title = 'Remove photo';
-    del.onclick = () => { state.photos = state.photos.filter((x) => x !== p); renderMoments(); rebuild(); };
-    const meta = document.createElement('div');
+    del.setAttribute('aria-label', 'Remove photo');
+    del.onclick = () => {
+      const before = [...state.photos];
+      state.photos = state.photos.filter((x) => x !== p);
+      renderMoments();
+      rebuild();
+      undoable('Removed a photo', () => { state.photos = before; renderMoments(); rebuild(); });
+    };
+    const meta = document.createElement('button');
+    meta.type = 'button';
     meta.className = 'meta';
     meta.title = 'Jump to this photo';
     const when = p.time != null ? ` · ${clockText(p.time, Number(ui.tz.value || 0))}` : '';
@@ -840,11 +885,13 @@ function renderMoments() {
     txt.type = 'text';
     txt.maxLength = 60;
     txt.value = b.text;
+    txt.setAttribute('aria-label', 'Bubble text');
     txt.oninput = () => { b.text = txt.value; rebuild(); };
     const move = document.createElement('button');
     move.className = 'here-btn';
     move.textContent = '⌖';
     move.title = 'Move this bubble to where the scrubber is';
+    move.setAttribute('aria-label', move.title);
     move.onclick = () => {
       const d = scrubD();
       if (d == null) return flash('Scrub to a point along the trail first.');
@@ -856,11 +903,19 @@ function renderMoments() {
     del.className = 'del';
     del.textContent = '✕';
     del.title = 'Remove bubble';
-    del.onclick = () => { state.bubbles = state.bubbles.filter((x) => x !== b); renderMoments(); rebuild(); };
-    const meta = document.createElement('div');
+    del.setAttribute('aria-label', 'Remove bubble');
+    del.onclick = () => {
+      const before = [...state.bubbles];
+      state.bubbles = state.bubbles.filter((x) => x !== b);
+      renderMoments();
+      rebuild();
+      undoable('Removed a bubble', () => { state.bubbles = before; renderMoments(); rebuild(); });
+    };
+    const meta = document.createElement('button');
+    meta.type = 'button';
     meta.className = 'meta';
     meta.title = 'Jump to this bubble';
-    meta.textContent = `💬 ${fmtKm(b.d)}`;
+    meta.textContent = `said at ${fmtKm(b.d)}`;
     meta.onclick = () => {
       const t = state.timeline?.videoTimeAtDistance(b.d);
       if (t != null) seek(Math.max(0, t - 0.3));
@@ -995,9 +1050,48 @@ window.addEventListener('pointerdown', () => {
 // ------------------------------------------------------------------ UI
 
 function setStatus(msg: string, error = false) {
+  clearTimeout(errorTimer);
   ui.status.textContent = msg;
   ui.status.classList.toggle('error', error);
+  ui.status.classList.remove('dismissable');
 }
+
+/** An error stays up long enough to read (and until clicked away), and says what to do next. */
+let errorTimer = 0;
+function showError(msg: string) {
+  setStatus(msg, true);
+  ui.status.classList.add('dismissable');
+  errorTimer = window.setTimeout(() => { if (ui.status.textContent === msg) setStatus(''); }, 12_000);
+}
+ui.status.addEventListener('click', () => { if (ui.status.classList.contains('dismissable')) setStatus(''); });
+
+function setPlayIcon() {
+  const playing = state.playing && !!state.track;
+  ui.play.innerHTML = pixelIcon(playing ? 'pause' : 'play');
+  ui.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+}
+
+/** "Removed … · Undo" for a few seconds after a delete; `restore` puts things back exactly as they were. */
+let toastTimer = 0;
+let undoFn: (() => void) | null = null;
+function undoable(text: string, restore: () => void) {
+  undoFn = restore;
+  ui.toastText.textContent = text;
+  ui.toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => { ui.toast.hidden = true; undoFn = null; }, 7000);
+}
+// hovering or focusing the toast keeps it up
+const hideToastLater = () => { clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { ui.toast.hidden = true; undoFn = null; }, 4000); };
+ui.toast.addEventListener('pointerenter', () => clearTimeout(toastTimer));
+ui.toast.addEventListener('focusin', () => clearTimeout(toastTimer));
+ui.toast.addEventListener('pointerleave', hideToastLater);
+ui.toast.addEventListener('focusout', hideToastLater);
+ui.toastUndo.onclick = () => {
+  undoFn?.();
+  undoFn = null;
+  ui.toast.hidden = true;
+};
 
 function setSeg(el: HTMLElement, v: string) {
   el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
@@ -1053,6 +1147,7 @@ function renderCheckpointList() {
     cb.checked = cp.enabled;
     cb.disabled = fixed;
     cb.title = 'Show this checkpoint';
+    cb.setAttribute('aria-label', `Show ${cp.name}`);
     cb.onchange = () => { cp.enabled = cb.checked; edited(cp, li); };
 
     const chip = document.createElement('span');
@@ -1065,10 +1160,12 @@ function renderCheckpointList() {
     name.type = 'text';
     name.maxLength = 18;
     name.value = cp.name;
+    name.setAttribute('aria-label', 'Checkpoint name');
     name.oninput = () => { cp.name = name.value || defaultName(cp.kind); edited(cp, li); };
 
     const kind = document.createElement('select');
     kind.disabled = fixed;
+    kind.setAttribute('aria-label', 'Checkpoint type');
     for (const k of fixed ? [cp.kind] : EDITABLE_KINDS) {
       const o = document.createElement('option');
       o.value = k;
@@ -1089,14 +1186,23 @@ function renderCheckpointList() {
     del.textContent = '✕';
     del.title = 'Remove checkpoint';
     del.disabled = fixed;
+    del.setAttribute('aria-label', `Remove checkpoint ${cp.name}`);
     del.onclick = () => {
+      const before = { checkpoints: [...state.checkpoints], tombstones: [...state.tombstones] };
       state.tombstones.push(cp.d);
       state.checkpoints = state.checkpoints.filter((c) => c !== cp);
       renderCheckpointList();
       rebuild();
+      undoable(`Removed ${cp.name}`, () => {
+        state.checkpoints = before.checkpoints;
+        state.tombstones = before.tombstones;
+        renderCheckpointList();
+        rebuild();
+      });
     };
 
-    const meta = document.createElement('div');
+    const meta = document.createElement('button');
+    meta.type = 'button';
     meta.className = 'meta';
     meta.title = 'Jump to this checkpoint';
     const m = cp.stayMin ?? 0;
@@ -1203,8 +1309,83 @@ function seek(t: number) {
   syncAudio();
 }
 
-bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); needsRender = true; persist(); });
-bindSeg(ui.aspect, (v) => { renderer.setAspect(v as Aspect); needsRender = true; ui.screen.classList.toggle('tall', v === 'portrait'); fitCanvas(); persist(); if (state.photos.length) void refreshPhotoArt(); });
+const optText = (sel: HTMLSelectElement) => sel.selectedOptions[0]?.textContent ?? '';
+const gateOn = () => ui.gateMode.value === 'on' || (ui.gateMode.value === 'auto' && state.activity === 'trailrun');
+
+/** Everything around the controls that mirrors them: folded-group summaries, the action bar line, the arch fields, quick setups. */
+function refreshChrome() {
+  ui.gateOpts.hidden = !gateOn();
+  const fmt = renderer.aspect === 'portrait' ? '9:16' : '16:9';
+  const len = state.cut === 'highlight' ? '15 s highlight' : `${ui.duration.value} s`;
+  ui.actMeta.textContent = `${fmt} · ${len} · ${ui.quality.value === '4' ? '720p' : '1080p'}`;
+  ui.sum.video.textContent = `${renderer.mode === '2d' ? '2D' : '3D'} · ${fmt} · ${len}`;
+  ui.sum.story.textContent = `${ACTIVITY_LABEL[state.activity]}${gateOn() ? ' · arch' : ''}`;
+  ui.sum.character.textContent = CHARACTER_LABEL[state.character] + (state.companion ? ` + ${state.companion}` : '');
+  const stops = state.checkpoints.filter((c) => c.enabled).length;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  ui.sum.moments.textContent = state.track
+    ? [plural(stops, 'stop'), state.photos.length && plural(state.photos.length, 'photo'), state.bubbles.length && plural(state.bubbles.length, 'bubble')].filter(Boolean).join(' · ')
+    : '';
+  ui.sum.world.textContent = `${optText(ui.scenery).replace(/ \(.*\)/, '')} · ${ui.weather.value === 'real' ? 'real weather' : optText(ui.weather).toLowerCase()}`;
+  ui.sum.sound.textContent = optText(ui.music);
+  ui.recipes.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+    const on = b.dataset.r === 'reel' ? renderer.aspect === 'portrait' && state.cut === 'highlight' : renderer.aspect === 'landscape' && state.cut === 'full';
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function setAspect(a: Aspect) {
+  renderer.setAspect(a);
+  setSeg(ui.aspect, a);
+  needsRender = true;
+  ui.screen.classList.toggle('tall', a === 'portrait');
+  fitCanvas();
+  refreshChrome();
+  persist();
+  if (state.photos.length) void refreshPhotoArt();
+}
+
+/** Quick setups: several settings at once. */
+ui.recipes.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+  if (!b) return;
+  if (b.dataset.r === 'reel') {
+    ui.quality.value = '4';
+    if (ui.gateMode.value === 'off') ui.gateMode.value = 'on';
+    setAspect('portrait');
+    setCut('highlight');
+  } else {
+    ui.quality.value = '6';
+    setAspect('landscape');
+    setCut('full');
+  }
+});
+
+bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); needsRender = true; refreshChrome(); persist(); });
+bindSeg(ui.aspect, (v) => setAspect(v as Aspect));
+ui.quality.onchange = () => refreshChrome();
+ui.shrink.onclick = () => {
+  const small = ui.stage.classList.toggle('compact');
+  ui.shrink.setAttribute('aria-pressed', String(small));
+  ui.shrink.setAttribute('aria-label', small ? 'Make the preview bigger' : 'Make the preview smaller');
+  ui.shrink.innerHTML = pixelIcon(small ? 'expand' : 'collapse');
+  fitCanvas();
+};
+
+// keyboard: Space plays / pauses, arrows step through the video (not while typing in a field)
+document.addEventListener('keydown', (e) => {
+  const t = e.target as HTMLElement;
+  if (!state.timeline || e.metaKey || e.ctrlKey || e.altKey || t.closest('input, select, textarea, [contenteditable]')) return;
+  if (e.key === ' ' && !t.closest('button, a, summary')) {
+    e.preventDefault();
+    ui.play.click();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 2;
+    seek(Math.max(0, Math.min(state.timeline.duration, state.t + (e.key === 'ArrowLeft' ? -step : step))));
+  }
+});
 bindSeg(ui.activity, (v) => setActivity(v as Activity));
 bindSeg(ui.character, (v) => { state.customSheet = null; ui.resetSheet.hidden = true; setCharacter(v as CharacterId); });
 bindSeg(ui.gender, (v) => { state.gender = v as Gender; rebuild(); });
@@ -1214,7 +1395,7 @@ ui.title.oninput = () => rebuild();
 ui.tz.onchange = () => rebuild();
 ui.minimap.onchange = () => { renderer.showMinimap = ui.minimap.checked; needsRender = true; persist(); };
 ui.showDate.onchange = () => { renderer.showDate = ui.showDate.checked; needsRender = true; persist(); };
-ui.music.onchange = () => { void updateSoundtrack(); persist(); };
+ui.music.onchange = () => { void updateSoundtrack(); refreshChrome(); persist(); };
 ui.volume.oninput = () => { updateSoundtrackSoon(); persist(); };
 ui.musicFile.onchange = async () => {
   const f = ui.musicFile.files?.[0];
@@ -1227,8 +1408,7 @@ ui.musicFile.onchange = async () => {
     ui.music.value = 'custom';
     await updateSoundtrack();
   } catch {
-    setStatus('Could not read that audio file.', true);
-    setTimeout(() => setStatus(''), 3000);
+    showError('Could not read that audio file. Try an MP3, M4A, OGG or WAV.');
   }
   ui.musicFile.value = '';
 };
@@ -1240,8 +1420,7 @@ ui.logoFile.onchange = async () => {
   try {
     await setLogo(await prepareLogo(f));
   } catch (e) {
-    setStatus((e as Error).message || 'Could not read that image.', true);
-    setTimeout(() => setStatus(''), 3000);
+    showError((e as Error).message || 'Could not read that image.');
   }
 };
 ui.logoRemove.onclick = () => void setLogo(null);
@@ -1316,8 +1495,7 @@ ui.sheet.onchange = async () => {
     ui.resetSheet.hidden = false;
     rebuild();
   } catch (e) {
-    setStatus((e as Error).message, true);
-    setTimeout(() => setStatus(''), 4000);
+    showError((e as Error).message);
   }
   ui.sheet.value = '';
 };
@@ -1396,8 +1574,7 @@ ui.restoreCps.onchange = async () => {
     void updateSoundtrack().then(syncAudio);
   } catch (e) {
     state.restoring = false;
-    setStatus((e as Error).message || 'Could not read that backup.', true);
-    setTimeout(() => setStatus(''), 3000);
+    showError((e as Error).message || 'Could not read that backup.');
   }
 };
 
@@ -1412,7 +1589,7 @@ ui.resetCps.onclick = () => {
 ui.play.onclick = () => {
   state.playing = !state.playing;
   if (state.playing && state.timeline && state.t >= state.timeline.duration) state.t = 0;
-  ui.play.innerHTML = state.playing ? '&#9208;' : '&#9654;';
+  setPlayIcon();
   syncAudio();
 };
 ui.scrub.oninput = () => {
@@ -1456,6 +1633,79 @@ function setCut(cut: 'full' | 'highlight') {
 }
 bindSeg(ui.cut, (v) => setCut(v as 'full' | 'highlight'));
 
+const slug = () => (ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase();
+
+// ---- progress on the preview while a video / GIF renders
+let renderStart = 0;
+function showRender(title: string) {
+  ui.finish.hidden = true;
+  ui.renderTitle.textContent = title;
+  ui.render.hidden = false;
+  renderStart = performance.now();
+  setRenderProgress(0);
+}
+function setRenderProgress(u: number) {
+  const pct = Math.round(u * 100);
+  ui.meterFill.style.width = `${pct}%`;
+  ui.meter.setAttribute('aria-valuenow', String(pct));
+  const spent = (performance.now() - renderStart) / 1000;
+  let left = '';
+  if (u > 0.04) {
+    const s = Math.max(0, Math.round((spent * (1 - u)) / u));
+    left = ` · about ${s >= 60 ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s` : `${s} s`} left`;
+  }
+  ui.renderInfo.textContent = `${pct}%${left}`;
+}
+ui.renderCancel.onclick = () => exportAbort?.abort();
+
+// ---- the finish card: the app's own "FINISHER!" moment
+let finished: { blob: Blob; name: string; url: string } | null = null;
+function drawFinishArt(line: string) {
+  const big = 'STAGE CLEAR!';
+  const w = Math.max(textWidth(big, 2), textWidth(line, 1)) + 8, h = 30;
+  const cv = ui.finishArt;
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, w, h);
+  drawText(ctx, big, w / 2, 2, C.yellow, { align: 'center', scale: 2, shadow: C.red });
+  drawText(ctx, line, w / 2, 21, C.cream, { align: 'center' });
+  // whole-pixel scaling keeps the lettering crisp, as big as the preview comfortably allows
+  const k = Math.max(2, Math.min(5, Math.floor((ui.screen.clientWidth * 0.7) / w)));
+  cv.style.width = `${w * k}px`;
+  cv.style.height = `${h * k}px`;
+}
+function showFinish(blob: Blob, name: string, kind: string) {
+  if (finished) URL.revokeObjectURL(finished.url);
+  const url = URL.createObjectURL(blob);
+  finished = { blob, name, url };
+  ui.download.href = url;
+  ui.download.download = name;
+  ui.download.click(); // save it straight away, like before; the card offers it again
+  drawFinishArt(`${kind} SAVED`);
+  ui.finishInfo.textContent = `${name} · ${(blob.size / 1e6).toFixed(1)} MB`;
+  const file = new File([blob], name, { type: blob.type });
+  ui.finishShare.hidden = !(navigator.canShare?.({ files: [file] }));
+  ui.finishPoster.hidden = kind === 'POSTER';
+  ui.render.hidden = true;
+  ui.finish.hidden = false;
+  (ui.finishShare.hidden ? ui.finishClose : ui.finishShare).focus();
+}
+function closeFinish() {
+  ui.finish.hidden = true;
+  ui.export.focus();
+}
+ui.finishClose.onclick = closeFinish;
+ui.finishShare.onclick = async () => {
+  if (!finished) return;
+  try {
+    await navigator.share({ files: [new File([finished.blob], finished.name, { type: finished.blob.type })], title: ui.title.value || 'Pixel Hike' });
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') showError('Sharing did not work here. Use Download, then share the file.');
+  }
+};
+ui.finishPoster.onclick = () => ui.poster.click();
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !ui.finish.hidden) closeFinish(); });
+
 ui.gif.onclick = async () => {
   if (!state.timeline || state.exporting) return;
   const was = state.cut;
@@ -1463,23 +1713,17 @@ ui.gif.onclick = async () => {
   state.exporting = true;
   syncAudio();
   exportAbort = new AbortController();
-  ui.progress.hidden = false;
-  ui.gif.textContent = 'Making GIF…';
+  showRender('Making the GIF (15 s highlight)…');
+  setActionsBusy(true);
   try {
-    const blob = await exportGif(renderer, { duration: state.timeline.duration, fps: 12.5, scale: 2, onProgress: (u) => (ui.progress.value = u), signal: exportAbort.signal });
-    const url = URL.createObjectURL(blob);
-    const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel.gif`;
-    ui.download.href = url;
-    ui.download.download = name;
-    ui.download.textContent = `Download ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
-    ui.download.hidden = false;
-    ui.download.click();
+    const blob = await exportGif(renderer, { duration: state.timeline.duration, fps: 12.5, scale: 2, onProgress: setRenderProgress, signal: exportAbort.signal });
+    showFinish(blob, `${slug()}-pixel.gif`, 'GIF');
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') setStatus(`GIF failed: ${(e as Error).message}`, true);
+    if ((e as Error).name !== 'AbortError') showError(`The GIF could not be made: ${(e as Error).message}. Try again, or export the MP4 instead.`);
   } finally {
     state.exporting = false;
-    ui.progress.hidden = true;
-    ui.gif.textContent = 'GIF (15 s loop)';
+    ui.render.hidden = true;
+    setActionsBusy(false);
     if (was !== 'highlight') setCut(was);
     syncAudio();
   }
@@ -1501,14 +1745,26 @@ async function makePoster() {
 }
 
 ui.poster.onclick = async () => {
-  const big = await makePoster();
-  if (!big) return;
-  const blob = await new Promise<Blob | null>((r) => big.toBlob(r, 'image/png'));
-  if (!blob) return;
-  const url = URL.createObjectURL(blob);
-  download(url, `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-poster.png`);
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  if (!state.track || state.exporting) return;
+  setStatus('Drawing the poster…');
+  await new Promise((r) => setTimeout(r, 30)); // let the message paint first
+  try {
+    const big = await makePoster();
+    const blob = big && (await new Promise<Blob | null>((r) => big.toBlob(r, 'image/png')));
+    setStatus('');
+    if (!blob) return showError('The poster could not be drawn. Try again after the map has loaded.');
+    showFinish(blob, `${slug()}-poster.png`, 'POSTER');
+  } catch (e) {
+    showError(`The poster could not be drawn: ${(e as Error).message}.`);
+  }
 };
+
+/** While a video renders, the other outputs wait; Export turns into Cancel. */
+function setActionsBusy(busy: boolean) {
+  ui.gif.disabled = ui.poster.disabled = busy;
+  ui.export.disabled = busy && !state.exporting;
+  ui.export.innerHTML = busy ? 'Cancel' : `${pixelIcon('film')} Export MP4`;
+}
 
 let exportAbort: AbortController | null = null;
 ui.export.onclick = async () => {
@@ -1524,31 +1780,24 @@ ui.export.onclick = async () => {
   state.exporting = true;
   syncAudio();
   exportAbort = new AbortController();
-  ui.export.textContent = 'Cancel';
-  ui.progress.hidden = false;
-  ui.download.hidden = true;
+  showRender(`Rendering the ${state.cut === 'highlight' ? '15 s highlight' : 'video'}…`);
+  setActionsBusy(true);
   try {
     const blob = await exportMp4(renderer, {
       duration: state.timeline.duration,
       fps: 30,
       scale: Number(ui.quality.value),
-      onProgress: (u) => (ui.progress.value = u),
+      onProgress: setRenderProgress,
       signal: exportAbort.signal,
       audio: state.soundtrack,
     });
-    const url = URL.createObjectURL(blob);
-    const name = `${(ui.title.value || 'hike').replace(/[^\w-]+/g, '-').toLowerCase()}-pixel-${renderer.mode}${state.cut === 'highlight' ? '-15s' : ''}.mp4`;
-    ui.download.href = url;
-    ui.download.download = name;
-    ui.download.textContent = `Download ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
-    ui.download.hidden = false;
-    ui.download.click();
+    showFinish(blob, `${slug()}-pixel-${renderer.mode}${state.cut === 'highlight' ? '-15s' : ''}.mp4`, 'VIDEO');
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') setStatus(`Export failed: ${(e as Error).message}`, true);
+    if ((e as Error).name !== 'AbortError') showError(`The export stopped: ${(e as Error).message}. Try 720p or a shorter Length.`);
   } finally {
     state.exporting = false;
-    ui.export.textContent = 'Export MP4';
-    ui.progress.hidden = true;
+    ui.render.hidden = true;
+    setActionsBusy(false);
     syncAudio();
   }
 };
@@ -1592,6 +1841,18 @@ function frame(now: number) {
 requestAnimationFrame(frame);
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
+mountIcons();
+setPlayIcon();
+refreshChrome();
+ui.canvas.hidden = true; // until a track is in, the attract scene has the screen
+startAttract(ui.attract, () => !!state.track);
+new ResizeObserver(() => {
+  // the attract scene: whole-pixel steps, like the real preview
+  const box = ui.screen.getBoundingClientRect();
+  const s = Math.max(1, Math.floor(Math.min((box.width - 8) / 160, (box.height - 8) / 90)));
+  ui.attract.style.width = `${160 * s}px`;
+  ui.attract.style.height = `${90 * s}px`;
+}).observe(ui.screen);
 
 // Dev/test hooks: ?sample loads public/samples/hike.gpx (?sample=fit → hike.fit). Both are git-ignored.
 const params = new URLSearchParams(location.search);
@@ -1624,6 +1885,9 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 if (matchMedia('(pointer: coarse)').matches) {
   const strong = ui.drop.querySelector('strong');
   if (strong) strong.textContent = 'Tap to open a GPX or FIT file';
+  const how = ui.drop.querySelector('.drop-empty small');
+  if (how) how.innerHTML = 'Suunto: activity &rarr; &middot;&middot;&middot; &rarr; <em>Export GPX workout</em> or <em>Export as FIT file</em>';
+  if (!state.track) ui.status.textContent = ''; // the big "Tap to open" box sits right under the preview
 }
 
 // iPhone / iPad: unusual file types can come up greyed out in the picker, so don't filter there

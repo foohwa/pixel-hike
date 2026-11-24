@@ -28,13 +28,14 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 - **Heart-rate effects** — on your hardest stretches (the top ~15 % of this hike's heart rate) the character flashes yellow on each heartbeat and sweats; near your max (top ~3 %) it blinks red like a game character taking damage, puffs and plods. The HUD heart turns yellow / red too. Without a heart rate, steep climbs just make you sweat.
 - **Data HUD** — distance, elevation, clock (or race timer + pace), pulsing heart rate, temperature (FIT), elevation profile, minimap.
 - **Music** — four bundled CC0 chiptunes by Juhani Junkala (auto-picked per activity), or your own file. Looped to the video length with a fade-out, played in the preview and muxed into the MP4 as AAC. Credits in [`public/music/CREDITS.md`](public/music/CREDITS.md).
-- **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset edits* forgets them.
+- **Remembers your edits** — renamed / retyped / hidden / deleted / added checkpoints and all settings are saved per track in your browser (localStorage) and survive activity changes and reloads. The GPX/FIT file itself is never modified. *Reset checkpoints* forgets the checkpoint edits; *Advanced → Back up edits* saves them all to a file.
 - **You are here** — a marker in the checkpoint list follows the hiker; passed checkpoints grey out, click a checkpoint's km line to jump there.
-- **Pixel poster** — *Poster PNG* makes a 1080×1350 still of the whole hike as a game level map: title and date, the route on the 3D diorama (or the 2D map, whichever view you picked) lit by a good time of day, with its checkpoint flags and the summit's name, six stat tiles, up to four of your photos as little polaroids, the elevation profile and your character cheering (plus the event logo).
-- **15 s highlight** — switch *Export* to *15 s highlight* and the preview (and the MP4) becomes a 15-second cut that goes straight to the summit and the finish, music re-timed to fit — for Stories and Reels.
-- **GIF** — *GIF (15 s loop)* turns the highlight into a looping 640×360 GIF (360×640 in 9:16), ~4 MB, made in the browser with the game palette as its colour table.
+- **Pixel poster** — *Poster* (next to Export, under the preview) makes a 1080×1350 still of the whole hike as a game level map: title and date, the route on the 3D diorama (or the 2D map, whichever view you picked) lit by a good time of day, with its checkpoint flags and the summit's name, six stat tiles, up to four of your photos as little polaroids, the elevation profile and your character cheering (plus the event logo).
+- **15 s highlight** — switch *Video → Cut* to *15 s highlight* (or pick the *Story / Reel* quick setup, which also sets 9:16 and 720p) and the preview (and the MP4) becomes a 15-second cut that goes straight to the summit and the finish, music re-timed to fit — for Stories and Reels.
+- **GIF** — the *GIF* button turns the highlight into a looping 640×360 GIF (360×640 in 9:16), ~4 MB, made in the browser with the game palette as its colour table.
 - **Export** — MP4 (H.264) encoded in the browser with WebCodecs; 16:9 or 9:16, 720p/1080p. Your GPX never leaves the browser (only elevation tiles are fetched).
 
+- **The editor** — settings are grouped (Story, Video, Character, Moments open; World, Sound, Advanced folded with a one-line summary). Export MP4, GIF and Poster sit in a bar under the preview (pinned to the bottom of the screen on phones); renders show progress and time left on the preview and end on a *STAGE CLEAR!* card with Share / Download / Make poster. Deleting a checkpoint, photo or bubble can be undone. Keyboard: Space plays / pauses, ← / → step 2 s (Shift: 10 s).
 - **On your phone** — an installable web app (PWA): once it's hosted, open it in Chrome/Safari and *Add to Home Screen*. On Android, share a GPX/FIT (plus photos) from the Suunto app straight to *Pixel Hike*; on iPhone, save the export to Files and tap *Tap to open*. The preview sits pinned at the top while the settings scroll under it; works offline once opened (map tiles and weather excepted). The build never includes `public/samples/`.
 
 ## Run
@@ -95,7 +96,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 
 See **[docs/SPRITE_SPEC.md](docs/SPRITE_SPEC.md)**: 16×16 frames facing right, a 64×128 sheet with 8 animation rows,
 the 32-colour palette (`docs/palette.hex` / `.json`), prompt templates and unfake.js settings.
-In the app: **Template PNG** downloads the current character's sheet to paint over; **Use my sprite sheet…** loads yours.
+In the app: **Advanced → Download template** downloads the current character's sheet to paint over; **Use my sprite sheet…** loads yours.
 
 ## Scripts
 

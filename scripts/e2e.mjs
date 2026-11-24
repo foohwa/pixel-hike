@@ -89,6 +89,7 @@ console.log(`wrote ${out}/e2e-clip.mp4`);
 
 step('6. backup / wipe / restore');
 // 6. backup → wipe browser storage → reload → restore from the file
+await page.$eval('#grpAdvanced', (d) => { d.open = true; }); // backup lives in the folded "Advanced" group
 const dl = page.waitForEvent('download');
 await page.click('#backupCps');
 const backupPath = `${out}/e2e-edits-backup.json`;
