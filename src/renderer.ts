@@ -114,6 +114,8 @@ export class PixelRenderer {
   aspect: Aspect = 'landscape';
   showMinimap = true;
   showDate = false;
+  /** 9:16 only: keep the HUD out of the strips Instagram Reels / TikTok cover with their own UI. */
+  safeZone = true;
   W = 320;
   H = 180;
   private facingLeft = false;
@@ -803,6 +805,13 @@ export class PixelRenderer {
       cpScreen,
       showMinimap: this.showMinimap,
       showDate: this.showDate,
+      // Instagram, as a post in the feed: a slight crop + the username / audio line over the top ~9%, the
+      // collab avatars and mute / tag icons over the bottom ~18%. Tapped into the full-screen Reel: zoomed to
+      // fill a tall phone, so ~5% of each side is cut off, the status bar sits on the top and the scrub bar on
+      // the bottom. These margins clear both, with room for taller phones.
+      safe: this.aspect === 'portrait' && this.safeZone
+        ? { top: Math.round(this.H * 0.12), bottom: Math.round(this.H * 0.22), side: Math.round(this.W * 0.07) }
+        : undefined,
       logo: this.data.logo,
       gate: this.data.gate,
       zones: this.data.zones,

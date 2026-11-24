@@ -27,6 +27,8 @@ export const GATE_THEMES: Record<GateColor, Theme> = {
 };
 
 export interface GateInput {
+  /** Bottom margin (game px) kept clear for the time plate; bigger in 9:16 for Instagram / TikTok. */
+  bottom?: number;
   ctx: CanvasRenderingContext2D;
   W: number;
   H: number;
@@ -206,14 +208,14 @@ export function drawGateScene(g: GateInput) {
     if (u < 0.3) {
       const d = new Date(g.track.stats.startTime + g.tzOffsetMin * 60000);
       const info = `START ${hhmm(d)}`;
-      plate(ctx, W / 2, H - 16, info);
+      plate(ctx, W / 2, H - 12 - (g.bottom ?? 4), info);
     }
   } else if (u >= 0.35) {
     const head = run ? 'FINISHER!' : 'FINISH!';
     const hs = textWidth(head, 3) < archW - 2 * pillarW ? 3 : textWidth(head, 2) < archW - 8 ? 2 : 1;
     drawText(ctx, head, W / 2, textY(hs, midY + (hs < 3 ? 6 : 0)), C.yellow, { align: 'center', scale: hs, shadow: C.ink });
     const el = g.track.stats.endTime - g.track.stats.startTime;
-    plate(ctx, W / 2, H - 16, run ? elapsed(el) : hhmm(new Date(g.track.stats.endTime + g.tzOffsetMin * 60000)));
+    plate(ctx, W / 2, H - 12 - (g.bottom ?? 4), run ? elapsed(el) : hhmm(new Date(g.track.stats.endTime + g.tzOffsetMin * 60000)));
     confetti(ctx, W / 2, ground - 20, (u - 0.35) * 3.8);
   }
 

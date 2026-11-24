@@ -106,6 +106,10 @@
               <button data-v="landscape" class="on">16:9</button>
               <button data-v="portrait">9:16 story</button>
             </div>
+            <div class="sub" id="safeOpts">
+              <label class="check"><input type="checkbox" id="safeZone" checked /> Keep stats clear of what Instagram / TikTok cover or crop</label>
+              <label class="check"><input type="checkbox" id="safeGuide" /> Show the covered strips in the preview</label>
+            </div>
           </div>
           <div class="field">
             <span class="lbl" id="cutLbl">Cut</span>
@@ -297,6 +301,7 @@
         <div class="screen" id="screen">
           <canvas id="attract" aria-hidden="true"></canvas>
           <canvas id="view"></canvas>
+          <div class="safe-guide" id="safeGuideBox" aria-hidden="true" hidden><i class="sg-top">username · status bar</i><i class="sg-side sg-l"></i><i class="sg-side sg-r"></i><i class="sg-bottom">avatars · icons · scrub bar</i></div>
           <div class="status" id="status" role="status" aria-live="polite">Drop a GPX or FIT file to begin</div>
 
           <div class="render" id="render" hidden>

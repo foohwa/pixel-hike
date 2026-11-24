@@ -122,6 +122,10 @@ const ui = {
   stage: $('stage'),
   screen: $('screen'),
   attract: $<HTMLCanvasElement>('attract'),
+  safeOpts: $('safeOpts'),
+  safeZone: $<HTMLInputElement>('safeZone'),
+  safeGuide: $<HTMLInputElement>('safeGuide'),
+  safeGuideBox: $('safeGuideBox'),
   render: $('render'),
   renderTitle: $('renderTitle'),
   meter: $('meter'),
@@ -654,6 +658,7 @@ function collectSettings() {
     aspect: renderer.aspect,
     minimap: ui.minimap.checked,
     showDate: ui.showDate.checked,
+    safeZone: ui.safeZone.checked,
     tz: Number(ui.tz.value),
     music: ui.music.value === 'custom' ? 'auto' : ui.music.value, // uploaded files aren't stored
     volume: Number(ui.volume.value),
@@ -702,6 +707,7 @@ function applySettings(s: Record<string, unknown>) {
   if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); ui.screen.classList.toggle('tall', s.aspect === 'portrait'); fitCanvas(); }
   if (typeof s.minimap === 'boolean') { ui.minimap.checked = s.minimap; renderer.showMinimap = s.minimap; }
   if (typeof s.showDate === 'boolean') { ui.showDate.checked = s.showDate; renderer.showDate = s.showDate; }
+  if (typeof s.safeZone === 'boolean') { ui.safeZone.checked = s.safeZone; renderer.safeZone = s.safeZone; }
   if (typeof s.tz === 'number') ui.tz.value = String(s.tz);
   if (typeof s.music === 'string') ui.music.value = s.music;
   if (typeof s.volume === 'number') ui.volume.value = String(s.volume);
@@ -1294,6 +1300,12 @@ function fitCanvas() {
   const s = Math.max(1, Math.floor(fit * dpr) / dpr);
   ui.canvas.style.width = `${renderer.W * s}px`;
   ui.canvas.style.height = `${renderer.H * s}px`;
+  // the safe-area guide sits exactly over the picture
+  const g = ui.safeGuideBox.style;
+  g.width = ui.canvas.style.width;
+  g.height = ui.canvas.style.height;
+  g.left = `${(box.width - renderer.W * s) / 2 - 3}px`; // -3: the screen's border
+  g.top = `${(box.height - renderer.H * s) / 2 - 3}px`;
 }
 
 function download(url: string, name: string) {
@@ -1315,6 +1327,9 @@ const gateOn = () => ui.gateMode.value === 'on' || (ui.gateMode.value === 'auto'
 /** Everything around the controls that mirrors them: folded-group summaries, the action bar line, the arch fields, quick setups. */
 function refreshChrome() {
   ui.gateOpts.hidden = !gateOn();
+  const tall = renderer.aspect === 'portrait';
+  ui.safeOpts.hidden = !tall;
+  ui.safeGuideBox.hidden = !(tall && ui.safeGuide.checked && !!state.track);
   const fmt = renderer.aspect === 'portrait' ? '9:16' : '16:9';
   const len = state.cut === 'highlight' ? '15 s highlight' : `${ui.duration.value} s`;
   ui.actMeta.textContent = `${fmt} · ${len} · ${ui.quality.value === '4' ? '720p' : '1080p'}`;
@@ -1365,6 +1380,8 @@ ui.recipes.addEventListener('click', (e) => {
 bindSeg(ui.mode, (v) => { renderer.setMode(v as ViewMode); needsRender = true; refreshChrome(); persist(); });
 bindSeg(ui.aspect, (v) => setAspect(v as Aspect));
 ui.quality.onchange = () => refreshChrome();
+ui.safeZone.onchange = () => { renderer.safeZone = ui.safeZone.checked; needsRender = true; persist(); };
+ui.safeGuide.onchange = () => { refreshChrome(); fitCanvas(); };
 ui.shrink.onclick = () => {
   const small = ui.stage.classList.toggle('compact');
   ui.shrink.setAttribute('aria-pressed', String(small));

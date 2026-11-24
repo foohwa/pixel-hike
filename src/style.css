@@ -158,6 +158,17 @@ button.mini { font-size: 11px; padding: 4px 8px; box-shadow: none; }
 }
 #view { image-rendering: pixelated; image-rendering: crisp-edges; display: block; grid-area: 1 / 1; }
 #attract { grid-area: 1 / 1; image-rendering: pixelated; display: block; }
+/* preview-only guide: the strips Reels / TikTok cover with their own UI (matches renderer safe area) */
+.safe-guide { position: absolute; pointer-events: none; }
+.safe-guide i {
+  position: absolute; left: 0; right: 0; display: grid; place-items: center; font-style: normal; font-size: 11px;
+  color: var(--cream); background: repeating-linear-gradient(135deg, rgb(217 72 95 / 0.38) 0 6px, rgb(217 72 95 / 0.18) 6px 12px);
+  outline: 1px dashed rgb(255 233 163 / 0.7); outline-offset: -1px;
+}
+.safe-guide .sg-top { top: 0; height: 12%; }
+.safe-guide .sg-bottom { bottom: 0; height: 22%; }
+.safe-guide .sg-side { top: 12%; bottom: 22%; width: 7%; right: auto; }
+.safe-guide .sg-r { left: auto; right: 0; }
 .status {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   background: var(--cream); color: var(--ink); padding: 10px 14px; border: 3px solid #000;

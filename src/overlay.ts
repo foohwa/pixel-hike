@@ -111,7 +111,13 @@ export interface OverlayInput {
   weatherElevation: number | null;
   /** Roughly where the sky ends on screen (for rain splashes / lightning). */
   skyH: number;
+  /** HUD margins in game px; bigger in 9:16 so Instagram / TikTok's own buttons and captions don't cover it. */
+  safe?: SafeArea;
 }
+
+export interface SafeArea { top: number; bottom: number; side: number }
+const EDGE: SafeArea = { top: 4, bottom: 4, side: 4 };
+const safeOf = (o: OverlayInput) => o.safe ?? EDGE;
 
 export interface EventLogo {
   set: LogoSet;
@@ -141,7 +147,7 @@ export function drawOverlay(o: OverlayInput) {
 
   if (o.gate && (o.state.phase === 'gateStart' || o.state.phase === 'gateFinish')) {
     drawGateScene({
-      ctx, W, H, state: o.state, sky: o.sky, gate: o.gate, hero: o.hero, big: o.big, pet: o.pet,
+      ctx, W, H, bottom: safeOf(o).bottom, state: o.state, sky: o.sky, gate: o.gate, hero: o.hero, big: o.big, pet: o.pet,
       logo: o.logo?.set ?? null, track: o.track, activity: o.activity, tzOffsetMin: o.tzOffsetMin,
     });
     return;
@@ -670,12 +676,13 @@ function drawHud(o: OverlayInput) {
     const pace = sampleAt(track, track.pace, d) / track.distScale;
     lines.push([null, `${paceText(pace)}/KM`, C.skyLight]);
   }
+  const m = safeOf(o);
   const lw = Math.max(...lines.map(([icon, s]) => textWidth(s) + (icon ? 10 : 0))) + 8;
-  panel(ctx, 4, 4, lw, 4 + lines.length * 9);
+  panel(ctx, m.side, m.top, lw, 4 + lines.length * 9);
   lines.forEach(([icon, s, col], i) => {
-    const y = 7 + i * 9;
-    if (icon) drawSprite(ctx, icon, 8, y + (icon.length < 7 ? 1 : 0), { anchor: 'topleft' });
-    drawText(ctx, s, icon ? 18 : 8, y, col);
+    const y = m.top + 3 + i * 9;
+    if (icon) drawSprite(ctx, icon, m.side + 4, y + (icon.length < 7 ? 1 : 0), { anchor: 'topleft' });
+    drawText(ctx, s, m.side + (icon ? 14 : 4), y, col);
   });
 
   // top-right: clock (or race timer), heart rate, temperature
@@ -697,15 +704,15 @@ function drawHud(o: OverlayInput) {
   else if (o.weather.rain > 0) right.push([RAIN_ICON, o.weather.rain > 0.6 ? 'HEAVY' : o.weather.rain > 0.3 ? 'RAIN' : 'DRIZZLE', C.skyLight]);
   const rw = Math.max(...right.map(([, s]) => textWidth(s))) + 20;
   const rh = 4 + right.length * 9;
-  panel(ctx, W - 4 - rw, 4, rw, rh);
+  panel(ctx, W - m.side - rw, m.top, rw, rh);
   right.forEach(([icon, s, col], i) => {
-    const y = 7 + i * 9;
-    drawSprite(ctx, icon, W - rw + 1 + Math.floor((7 - icon[0].length) / 2), y, { anchor: 'topleft' });
-    drawText(ctx, s, W - 8, y, col, { align: 'right' });
+    const y = m.top + 3 + i * 9;
+    drawSprite(ctx, icon, W - m.side - rw + 5 + Math.floor((7 - icon[0].length) / 2), y, { anchor: 'topleft' });
+    drawText(ctx, s, W - m.side - 4, y, col, { align: 'right' });
   });
 
   drawDial(o);
-  if (o.showMinimap) drawMinimap(o, W - 4 - 42, 4 + rh + 3, 42);
+  if (o.showMinimap) drawMinimap(o, W - m.side - 42, m.top + rh + 3, 42);
   drawProfile(o);
 }
 
@@ -723,12 +730,13 @@ function nearestHex(c: [number, number, number]) {
 function drawDial(o: OverlayInput) {
   const { ctx, W, sky, dial } = o;
   const w = 38, h = 22;
+  const m = safeOf(o);
   let x = Math.round(W / 2 - w / 2);
-  let y = 4;
+  let y = m.top;
   if (W < 200) {
     // portrait: tuck it under the left panel so nothing overlaps
-    x = 4;
-    y = 4 + 4 + 2 * 9 + 3 + (o.activity === 'trailrun' ? 9 : 0);
+    x = m.side;
+    y = m.top + 4 + 2 * 9 + 3 + (o.activity === 'trailrun' ? 9 : 0);
   }
   panel(ctx, x, y, w, h);
   const ix = x + 1, iy = y + 1, iw = w - 2, ih = h - 2;
@@ -777,7 +785,9 @@ function drawToasts(o: OverlayInput) {
     if (age < 0 || age > 2.2) continue;
     const w = textWidth(toast.text) + 10;
     const slide = Math.min(1, age * 5);
-    const y0 = W < H ? H - 4 - 18 - 18 - (o.env.splits ? 16 : 0) : 30;
+    const m = safeOf(o);
+    const badge = W < H && o.logo?.badge ? 24 : 0; // clear of the logo above the NEXT line
+    const y0 = W < H ? H - m.bottom - 18 - 18 - (o.env.splits ? 16 : 0) - badge : m.top + 26;
     const y = Math.round(y0 + (1 - slide) * (W < H ? 8 : -8));
     panel(ctx, Math.round(W / 2 - w / 2), y, w, 12, C.cream, C.ink);
     drawText(ctx, toast.text, W / 2, y + 3, C.plum, { align: 'center' });
@@ -788,8 +798,9 @@ const profileCache = new WeakMap<Track, { w: number; cols: Float32Array }>();
 
 function drawProfile(o: OverlayInput) {
   const { ctx, W, H, track, state } = o;
-  const x0 = 4, w = W - 8, ph = 16;
-  const y0 = H - 4 - ph - 2;
+  const m = safeOf(o);
+  const x0 = m.side, w = W - 2 * m.side, ph = 16;
+  const y0 = H - m.bottom - ph - 2;
   panel(ctx, x0, y0, w, ph + 2);
   const iw = w - 4;
   let cache = profileCache.get(track);
@@ -911,7 +922,7 @@ function drawBanner(o: OverlayInput) {
   const drop = easeOutBack(clamp(age * 4, 0, 1));
   // at a viewpoint the banner gets out of the way after a second so you can see the view
   const away = cp.kind === 'view' && o.env.landmarks ? clamp((age - 1.1) * 4, 0, 1) : 0;
-  const top = H > W ? 84 : 44; // keep clear of the dial / minimap
+  const top = (H > W ? 84 : 44) + safeOf(o).top - 4; // keep clear of the dial / minimap
   const y = Math.round(top - (1 - drop + away) * (top + bh + 20));
   const x = Math.round(W / 2 - bw / 2);
   panel(ctx, x, y, bw, bh, C.cream, C.ink);
@@ -956,19 +967,22 @@ function drawNext(o: OverlayInput) {
   const km = ((next.d - state.d) * track.distScale) / 1000;
   const gain = gainBetween(track, state.d, next.d);
   const tail = `${km.toFixed(1)} KM${gain >= 10 ? ` ^${fmtInt(gain)} M` : ''}`;
-  const maxW = Math.floor(W * (o.logo?.badge ? 0.64 : 0.9)) - 12;
+  const m = safeOf(o);
+  // in 9:16 the corner logo sits above this line (badgeAbove), so the line gets the full width
+  const maxW = W < H ? W - 2 * m.side - 6 : Math.floor(W * (o.logo?.badge ? 0.64 : 0.9)) - 12;
   let name = next.name.toUpperCase();
   const fixed = textWidth(`NEXT  ${tail}`) + 8;
   while (name.length > 3 && fixed + textWidth(name) > maxW) name = name.slice(0, -1);
   if (name !== next.name.toUpperCase()) name = name.slice(0, -1) + '.';
-  const y = H - 4 - 18 - 3 - 11;
+  const y = H - m.bottom - 18 - 3 - 11;
   const w = fixed + textWidth(name) + 6;
-  panel(ctx, 4, y, w, 11);
+  const x = m.side;
+  panel(ctx, x, y, w, 11);
   ctx.fillStyle = KIND_COLOR[next.kind] === C.white ? C.cream : KIND_COLOR[next.kind];
-  ctx.fillRect(7, y + 3, 2, 5);
-  drawText(ctx, 'NEXT', 12, y + 2, C.rock);
-  drawText(ctx, name, 12 + textWidth('NEXT ') + 4, y + 2, C.white);
-  drawText(ctx, tail, 4 + w - 4, y + 2, C.yellow, { align: 'right' });
+  ctx.fillRect(x + 3, y + 3, 2, 5);
+  drawText(ctx, 'NEXT', x + 8, y + 2, C.rock);
+  drawText(ctx, name, x + 8 + textWidth('NEXT ') + 4, y + 2, C.white);
+  drawText(ctx, tail, x + w - 4, y + 2, C.yellow, { align: 'right' });
 }
 
 // ---------------------------------------------------------------- signs & tents
@@ -1164,6 +1178,9 @@ function drawBadge(o: OverlayInput) {
   if (!o.logo?.badge || state.phase !== 'move' && state.phase !== 'pause') return;
   const h = W > H ? 20 : 22;
   const img = o.logo.set.get(Math.min(h, Math.floor((W * 0.3) / o.logo.set.aspect)), true);
-  const profileTop = H - 4 - 18;
-  ctx.drawImage(img, W - 4 - img.width, profileTop - 3 - img.height);
+  const m = safeOf(o);
+  const profileTop = H - m.bottom - 18;
+  // 9:16 is too narrow for the logo beside the NEXT line: it goes above it
+  const above = W < H && o.env.splits ? 11 + 3 : 0;
+  ctx.drawImage(img, W - m.side - img.width, profileTop - 3 - above - img.height);
 }
