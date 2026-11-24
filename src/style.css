@@ -165,9 +165,9 @@ button.mini { font-size: 11px; padding: 4px 8px; box-shadow: none; }
   color: var(--cream); background: repeating-linear-gradient(135deg, rgb(217 72 95 / 0.38) 0 6px, rgb(217 72 95 / 0.18) 6px 12px);
   outline: 1px dashed rgb(255 233 163 / 0.7); outline-offset: -1px;
 }
-.safe-guide .sg-top { top: 0; height: 12%; }
-.safe-guide .sg-bottom { bottom: 0; height: 22%; }
-.safe-guide .sg-side { top: 12%; bottom: 22%; width: 7%; right: auto; }
+.safe-guide .sg-top { top: 0; height: 14%; }
+.safe-guide .sg-bottom { bottom: 0; height: 12%; }
+.safe-guide .sg-side { top: 14%; bottom: 12%; width: 7%; right: auto; }
 .safe-guide .sg-r { left: auto; right: 0; }
 .status {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -323,4 +323,53 @@ body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-are
 
 @media (prefers-reduced-motion: reduce) {
   button:active:not(:disabled), .btn:active { transform: none; }
+}
+
+/* ---- dropdowns: a pixel arrow + square box everywhere (the OS look is switched off) */
+select {
+  appearance: none;
+  padding-right: 28px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4' shape-rendering='crispEdges'%3E%3Cpath fill='%239aa0a8' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 14px 8px;
+}
+select:hover:not(:disabled), select:focus-visible {
+  border-color: var(--yellow);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffcd75' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3C/svg%3E");
+}
+select:disabled { opacity: 0.45; cursor: not-allowed; }
+/* the small ones in lists and editors: a smaller arrow, tucked in */
+.cps select, .zrow select, .lrow select, #logoOpts select {
+  padding-right: 18px; background-position: right 5px center; background-size: 7px 4px;
+}
+
+/* the open list too, where the browser lets us (Chrome / Edge 135+, Safari 27+); with a mouse only:
+   on phones the OS picker (the iPhone wheel) is the better control, so it stays */
+@supports (appearance: base-select) {
+  @media (pointer: fine) {
+    select, select::picker(select) { appearance: base-select; }
+    /* a customizable select no longer sizes itself to its longest option: keep the chosen one on one line */
+    select { white-space: nowrap; overflow: clip; overflow-clip-margin: content-box; } /* stop before the arrow */
+    select::picker-icon { display: none; } /* the pixel arrow above stands in for it */
+    /* its own rule: browsers that don't know :open would drop a whole list containing it */
+    select:open { border-color: var(--yellow); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffcd75' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3C/svg%3E"); }
+    select::picker(select) {
+      margin-block: 4px;
+      padding: 4px;
+      background: var(--ink);
+      color: var(--white);
+      border: 2px solid var(--line);
+      box-shadow: 4px 4px 0 #000;
+      scrollbar-color: var(--night) var(--ink);
+    }
+    select option { padding: 5px 10px 5px 8px; gap: 8px; min-block-size: 0; }
+    select option::checkmark {
+      content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='10' viewBox='0 0 3 5' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffcd75' d='M0 0h1v5H0zM1 1h1v3H1zM2 2h1v1H2z'/%3E%3C/svg%3E");
+    }
+    select option:hover, select option:focus-visible { background: var(--night); color: var(--yellow); outline: none; }
+    select option:checked { color: var(--cream); }
+    select option:checked:hover, select option:checked:focus-visible { color: var(--yellow); }
+  }
 }

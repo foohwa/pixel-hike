@@ -808,9 +808,9 @@ export class PixelRenderer {
       // Instagram, as a post in the feed: a slight crop + the username / audio line over the top ~9%, the
       // collab avatars and mute / tag icons over the bottom ~18%. Tapped into the full-screen Reel: zoomed to
       // fill a tall phone, so ~5% of each side is cut off, the status bar sits on the top and the scrub bar on
-      // the bottom. These margins clear both, with room for taller phones.
+      // the bottom. Tuned by eye on real posts: 14% top, 12% bottom, 7% sides.
       safe: this.aspect === 'portrait' && this.safeZone
-        ? { top: Math.round(this.H * 0.12), bottom: Math.round(this.H * 0.22), side: Math.round(this.W * 0.07) }
+        ? { top: Math.round(this.H * 0.14), bottom: Math.round(this.H * 0.12), side: Math.round(this.W * 0.07) }
         : undefined,
       logo: this.data.logo,
       gate: this.data.gate,
