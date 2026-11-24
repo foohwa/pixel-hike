@@ -113,6 +113,8 @@ export interface OverlayInput {
   skyH: number;
   /** HUD margins in game px; bigger in 9:16 so Instagram / TikTok's own buttons and captions don't cover it. */
   safe?: SafeArea;
+  /** Leave out the elevation profile strip (the side-scroller's level already is the profile). */
+  noProfile?: boolean;
 }
 
 export interface SafeArea { top: number; bottom: number; side: number }
@@ -713,7 +715,7 @@ function drawHud(o: OverlayInput) {
 
   drawDial(o);
   if (o.showMinimap) drawMinimap(o, W - m.side - 42, m.top + rh + 3, 42);
-  drawProfile(o);
+  if (!o.noProfile) drawProfile(o);
 }
 
 const palRgb = PALETTE.map((h) => [h, ...rgb01(h)] as [string, number, number, number]);

@@ -4,6 +4,7 @@ Turn a GPX workout into a cute pixel-art route video — like Relive / Strava Fl
 
 - **3D diorama** — real terrain (free AWS Terrain Tiles) rendered at 320×180 and quantised to a 32-colour palette, camera follows a chibi hiker along the track.
 - **2D map** — top-down retro topo map with contour lines.
+- **Side-scroller** — the hike as one long level seen from the side: distance runs left to right (loops and switchbacks unroll), height is your watch's elevation drawn steeper than real (up to 2.5×, capped so the steepest sustained climbs stay under ~37°). Behind you a ridge from the real terrain beside the route and, far off, the skyline of the whole hike with a little flag on the summit still to come; below the ground a cut-through of soil and rock. Trees, ground and props follow the elevation zones (jungle palms and giants, mossy forest, pines thinning out above the treeline, snow); roads, dirt tracks, bridges over rivers, street lights and traffic come from OpenStreetMap. The intro starts on the whole level and dives in to the walker, viewpoints pull the camera back, and the poster becomes the level map. Same sky, weather, HUD (minimap, no profile strip — the level is the profile), banners, animals and exports as 3D / 2D.
 - **Activities** — *Hike*, *Camp hike* (stops of 2 h+ become campsites; the clock time-lapses through the night while you sleep in the tent) and *Trail run* (runner sprite, aid-station checkpoints, race timer + moving pace, FINISHER card). Guessed from the file, switchable.
 - **Checkpoints** — summit, other peaks (by prominence), rests, campsites, aid stations, viewpoints and finish. Auto-detected; rename, change type, delete, or add your own at the current scrub position.
 - **Characters** — Hiker, Runner, Dog or Cat, each male or female, plus an optional dog/cat buddy. Animations switch with the terrain (walk, climb > 15 %, careful descent, run, cheer, rest, sleep). All follow one [sprite standard](docs/SPRITE_SPEC.md), so you can drop in your own sheet.
@@ -78,6 +79,7 @@ For development, put a track at `public/samples/hike.gpx` / `hike.fit` (git-igno
 | `src/gate.ts` | Start/finish arch scenes (pixel stage, countdown, dissolve) and the mini arch for the map |
 | `src/hero3d.ts` | The walker + companion standing in the 3D scene: pixel-exact camera-facing quads at their depth, lit by the scene, casting silhouette shadows along the sun / moon |
 | `src/sites3d.ts` | Checkpoint set pieces built into the 3D terrain: aid station (red gazebos), camp (tents, fire ring), rest bench, summit cairn + signboard, viewpoint deck, start/finish arch; real flags that raise on arrival; lit at night |
+| `src/side.ts` | The side-scroller view: level camera (walking scale from the video's pace ↔ whole-level overview), ground / ridge / skyline layers drawn per pixel in palette colours, trees, bridges, and the screen spots the overlay draws the walker, checkpoints and animals at |
 | `src/falls3d.ts` | 3D waterfall (rock cliff, animated water curtain, splash pool) set into the terrain |
 | `src/landmarks.ts` | Viewpoint finder (OSM viewpoints + terrain openness) and naming checkpoints after mapped peaks / camps |
 | `src/zones.ts` | Elevation zones + technical stretches, trail-side prop sprites (placed per frame in `renderer.ts`) |
@@ -100,9 +102,9 @@ In the app: **Advanced → Download template** downloads the current character's
 
 ## Scripts
 
-- `node scripts/shot.mjs <outdir> <3d|2d> <landscape|portrait> t1 t2 …` — screenshots at given video times (needs `npm run dev` on port 5199).
+- `node scripts/shot.mjs <outdir> <3d|2d|side> <landscape|portrait> t1 t2 …` — screenshots at given video times (needs `npm run dev` on port 5199).
 - `node scripts/export-test.mjs out.mp4 [mode] [aspect] [scale] [seconds]` — export in headless Chrome (use `BASE=` a `vite preview` URL so hot-reload can't interrupt it).
-- `node scripts/e2e.mjs [outdir]` — end-to-end check: checkpoint edits survive activity switches and reloads, you-are-here row, MP4 with audio.
+- `node scripts/e2e.mjs [outdir]` — end-to-end check: checkpoint edits survive activity switches and reloads, you-are-here row, MP4 with audio, the side-scroller view renders / exports / makes a poster.
 - `node scripts/sheets.mjs` — regenerate `docs/sprites/*.png` from the built-in characters.
 - `node scripts/grok-sprites.mjs wild|props` — turn the Grok Imagine sheets in `art/grok/<group>/` into palette sprites (`src/wildart.ts`, `src/propsart.ts`); see [the sprite standard](docs/SPRITE_SPEC.md#wildlife-and-props-from-grok-imagine).
 - `node scripts/atlas-sprites.mjs search <words…>` / `build` — find sprites in the CC0 [Pixel Art Atlas](https://huggingface.co/datasets/Angais/pixel-art-atlas-1.4m) (1.4M AI-generated 16×16 sprites; downloaded once to `~/.cache/pixel-hike/atlas`, setup in the script header) on a numbered contact sheet, then turn the rows picked in `art/atlas/picks.json` into palette sprites (`src/atlasart.ts`: the pangolin, wild boar and monitor lizard, plus trail props). Captions are sometimes wrong, so pick by eye.

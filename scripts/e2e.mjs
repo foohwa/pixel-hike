@@ -87,6 +87,35 @@ writeFileSync(`${out}/e2e-clip.mp4`, mp4);
 ok(mp4.includes('mp4a') || mp4.includes('Opus'), `MP4 has an audio track (${(mp4.length / 1e3).toFixed(0)} kB)`);
 console.log(`wrote ${out}/e2e-clip.mp4`);
 
+step('5b. side-scroller view');
+const sideErrors = [];
+page.on('pageerror', (e) => sideErrors.push(e.message));
+const side = await page.evaluate(async () => {
+  const h = window.__pixelHike;
+  h.setMode('side');
+  const cv = document.getElementById('view');
+  const grab = document.createElement('canvas');
+  grab.width = cv.width; grab.height = cv.height;
+  const g = grab.getContext('2d');
+  const colours = [];
+  for (const t of [1, h.duration * 0.3, h.duration * 0.6, h.duration - 1]) {
+    h.seek(t);
+    g.drawImage(cv, 0, 0);
+    const d = g.getImageData(0, Math.floor(cv.height * 0.6), cv.width, Math.floor(cv.height * 0.4)).data;
+    const seen = new Set();
+    for (let i = 0; i < d.length; i += 4) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+    colours.push(seen.size);
+  }
+  const clip = await h.exportMp4(4, 2);
+  const poster = await h.posterDataUrl();
+  h.setMode('3d');
+  return { colours, mp4: clip.size, poster: poster?.length ?? 0 };
+});
+ok(side.colours.every((n) => n >= 6), `side view draws ground at every sample time (colours: ${side.colours.join(', ')})`);
+ok(side.mp4 > 10_000, `side view exports an MP4 (${(side.mp4 / 1e3).toFixed(0)} kB)`);
+ok(side.poster > 10_000, 'side view makes a poster');
+ok(sideErrors.length === 0, `no page errors in the side view${sideErrors.length ? `: ${sideErrors[0]}` : ''}`);
+
 step('6. backup / wipe / restore');
 // 6. backup → wipe browser storage → reload → restore from the file
 await page.$eval('#grpAdvanced', (d) => { d.open = true; }); // backup lives in the folded "Advanced" group

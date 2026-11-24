@@ -1,5 +1,5 @@
 // Screenshots of the preview at given video times.
-// usage: node scripts/shot.mjs <outdir> <3d|2d> <landscape|portrait> t1 t2 ...
+// usage: node scripts/shot.mjs <outdir> <3d|2d|side> <landscape|portrait> t1 t2 ...
 // env: BASE (default http://localhost:5199), SAMPLE=fit, PREFIX=name, SETUP='h.setActivity("trailrun")'
 import { launch } from './browser.mjs';
 const [, , out, mode = '3d', aspect = 'landscape', ...ts] = process.argv;

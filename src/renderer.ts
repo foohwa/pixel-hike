@@ -8,14 +8,15 @@ import type { GateOptions } from './gate';
 import { openness } from './landmarks';
 import { frameOf, type View, headLift } from './characters';
 import { SceneFigures } from './hero3d';
-import { clockText, drawOverlay, pickAnim, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type ScreenPoint } from './overlay';
+import { clockText, drawOverlay, pickAnim, type DecorFrame, type DecorItem, type DialState, type EventLogo, type MapFrame, type OverlayInput, type ScreenPoint } from './overlay';
 import { C, PALETTE, rgb01 } from './palette';
-import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SunEvent } from './sky';
+import { moonPhase, moonPosition, skyAt, sunEvents, sunPosition, type SkyState, type SunEvent } from './sky';
 import { shared, type Scenery, type Terrain } from './terrain';
 import type { Timeline, TimelineState } from './timeline';
 import { clamp, FOLLOW_YAW, followDistance, gaussian, sampleAt, type Activity, type Checkpoint, type Track } from './track';
 import { buildSites, hasSite, type Sites } from './sites3d';
-import { buildWater, type WaterData, type WaterScene } from './water';
+import { buildWater, type SurfaceInfo, type WaterData, type WaterScene } from './water';
+import { SideScene } from './side';
 import { decorDensity, decorSprite, rng, techSprite, ZONE_LABEL, type TrailZones } from './zones';
 import { effortAt } from './effort';
 import { photoCaption, scheduleBubbles, type Bubble, type PhotoArt } from './moments';
@@ -24,7 +25,7 @@ import { weatherAt, weatherEvents, type WeatherMode, type WeatherNow, type Weath
 
 THREE.ColorManagement.enabled = false; // palette hex values pass straight through
 
-export type ViewMode = '3d' | '2d';
+export type ViewMode = '3d' | '2d' | 'side';
 export type Aspect = 'landscape' | 'portrait';
 export const LOW_RES: Record<Aspect, [number, number]> = { landscape: [320, 180], portrait: [180, 320] };
 
@@ -57,6 +58,8 @@ export interface SceneData {
   weather: { series: WeatherSeries | null; mode: WeatherMode };
   /** A short cut (the 15 s highlight): pop-ups only when they fit right where they belong. */
   brief?: boolean;
+  /** Which parts of the route are road / dirt track / trail (from OpenStreetMap), or null. */
+  surface?: SurfaceInfo | null;
 }
 
 /** Optional scenery extras (each can be switched off in the sidebar). */
@@ -136,6 +139,10 @@ export class PixelRenderer {
   /** Map sprites seen last frame → video time each came into view (for fading in), and that frame's time. */
   private mapSeen = new Map<string, number>();
   private mapT = -1;
+  /** The side-scroller view (side.ts), its picture as a texture, and last frame's checkpoint spots. */
+  private side = new SideScene();
+  private sideTex: THREE.CanvasTexture;
+  private sidePoints = new Map<string, ScreenPoint>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -156,6 +163,7 @@ export class PixelRenderer {
     this.overlayTex.minFilter = THREE.NearestFilter;
     this.overlayTex.magFilter = THREE.NearestFilter;
     this.overlayTex.generateMipmaps = false;
+    this.sideTex = this.pixelTexture(this.side.canvas);
 
     const mat = new THREE.ShaderMaterial({
       depthTest: false,
@@ -257,6 +265,14 @@ export class PixelRenderer {
     this.scene.add(this.figures.group);
   }
 
+  private pixelTexture(c: HTMLCanvasElement) {
+    const t = new THREE.CanvasTexture(c);
+    t.minFilter = THREE.NearestFilter;
+    t.magFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    return t;
+  }
+
   setAspect(aspect: Aspect) {
     this.aspect = aspect;
     this.resize(...LOW_RES[aspect]);
@@ -271,6 +287,8 @@ export class PixelRenderer {
     this.overlay.width = this.W;
     this.overlay.height = this.H;
     this.overlayTex.dispose(); // re-upload at the new size
+    this.side.resize(this.W, this.H);
+    this.sideTex.dispose();
     this.post.mat.uniforms.uRes.value.set(this.W, this.H);
     this.camera.aspect = this.W / this.H;
     this.camera.updateProjectionMatrix();
@@ -299,6 +317,10 @@ export class PixelRenderer {
     this.data = data;
     this.syncWater(data);
     this.syncSites(data);
+    this.side.setData({
+      track: data.track, terrain: data.terrain, timeline: data.timeline, checkpoints: data.checkpoints,
+      zones: data.zones, scenery: data.env.scenery, surface: data.surface ?? null,
+    });
     this.bubbleTimes = scheduleBubbles(data.bubbles, (d) => data.timeline.videoTimeAtDistance(d), data.timeline.gateIn + data.timeline.intro);
     this.toasts = [];
     for (const ev of this.sunEvents) {
@@ -597,6 +619,7 @@ export class PixelRenderer {
     if (!this.data || !this.rig) return;
     const { track, terrain, timeline, checkpoints } = this.data;
     const st = timeline.sample(tSec);
+    if (this.mode === 'side') return this.renderSide(st);
     const r = this.rig;
 
     // ---- camera
@@ -781,28 +804,58 @@ export class PixelRenderer {
     const map = this.mapFrame(st, hx, hz, sky.lamp > 0.5);
 
     if (this.snap) this.overlayCtx.clearRect(0, 0, this.W, this.H);
-    else drawOverlay({
+    else this.drawHudLayer(st, sky, ms, weather, {
+      heroAt: hiker,
+      facingLeft: this.facingLeft,
+      petAt,
+      petFacingLeft: this.facingLeft,
+      cpScreen,
+      decor,
+      map,
+      heroInScene: inScene,
+      heroOnTop: inScene && (this.data.hero.size ?? 16) > 16,
+      heroView: this.view,
+      sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
+      effort,
+      heroT,
+      wild,
+      skyH: is2d ? 0 : Math.round(this.H * 0.38),
+    });
+    this.overlayTex.needsUpdate = true;
+
+    // ---- post (quantise + sky + overlay) to the canvas
+    const pu = this.post.mat.uniforms;
+    this.skyPoint(sp.azimuth, sp.elevation, pu.uSun.value);
+    this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
+    const dir = this.camera.getWorldDirection(this.tmp2);
+    const hfov = 2 * Math.atan(Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect);
+    this.postPass(sky, weather, overcast, st.t, ms, (Math.atan2(dir.x, -dir.z) / hfov) * this.W);
+  }
+
+  /** The HUD / sprite layer: everything the views share, plus the view's own screen positions in `view`. */
+  private drawHudLayer(
+    st: TimelineState, sky: SkyState, ms: number, weather: WeatherNow,
+    view: Pick<OverlayInput, 'heroAt' | 'facingLeft' | 'petAt' | 'petFacingLeft' | 'cpScreen' | 'decor' | 'map' | 'heroInScene'
+      | 'heroOnTop' | 'heroView' | 'sited' | 'effort' | 'heroT' | 'wild' | 'skyH' | 'noProfile'>,
+  ) {
+    const data = this.data!;
+    drawOverlay({
       ctx: this.overlayCtx,
       W: this.W,
       H: this.H,
-      track,
-      activity: this.data.activity,
-      checkpoints,
-      timeline,
+      track: data.track,
+      activity: data.activity,
+      checkpoints: data.checkpoints,
+      timeline: data.timeline,
       state: st,
       sky,
       dial: this.dialAt(ms),
       toasts: this.toasts,
-      title: this.data.title,
-      tzOffsetMin: this.data.tzOffsetMin,
-      hero: this.data.hero,
-      big: this.data.big ?? null,
-      heroAt: hiker,
-      facingLeft: this.facingLeft,
-      pet: this.data.pet,
-      petAt,
-      petFacingLeft: this.facingLeft,
-      cpScreen,
+      title: data.title,
+      tzOffsetMin: data.tzOffsetMin,
+      hero: data.hero,
+      big: data.big ?? null,
+      pet: data.pet,
       showMinimap: this.showMinimap,
       showDate: this.showDate,
       // Instagram, as a post in the feed: a slight crop + the username / audio line over the top ~9%, the
@@ -812,35 +865,26 @@ export class PixelRenderer {
       safe: this.aspect === 'portrait' && this.safeZone
         ? { top: Math.round(this.H * 0.14), bottom: Math.round(this.H * 0.12), side: Math.round(this.W * 0.07) }
         : undefined,
-      logo: this.data.logo,
-      gate: this.data.gate,
-      zones: this.data.zones,
-      decor,
-      map,
-      heroInScene: inScene,
-      heroOnTop: inScene && (this.data.hero.size ?? 16) > 16,
-      heroView: this.view,
-      sited: !is2d ? new Set(checkpoints.filter(hasSite).map((c) => c.id)) : null,
-      env: this.data.env,
-      effort,
-      heroT,
+      logo: data.logo,
+      gate: data.gate,
+      zones: data.zones,
+      env: data.env,
       weather,
-      wild,
-      weatherElevation: this.data.weather.series?.elevation ?? null,
-      skyH: is2d ? 0 : Math.round(this.H * 0.38),
+      weatherElevation: data.weather.series?.elevation ?? null,
       bubbles: this.bubbleTimes,
       photo: this.photoNow(st),
+      ...view,
     });
-    this.overlayTex.needsUpdate = true;
+  }
 
-    // ---- post (quantise + sky + overlay) to the canvas
+  /** Sky, palette snap and the overlay, onto the visible canvas (sun / moon already placed in the uniforms). */
+  private postPass(sky: SkyState, weather: WeatherNow, overcast: number, t: number, ms: number, yawPx: number) {
+    const env = this.data!.env;
     const pu = this.post.mat.uniforms;
     pu.uSkyTop.value.set(...sky.top);
     pu.uSkyBot.value.set(...sky.bottom);
     pu.uStars.value = sky.stars;
-    pu.uTime.value = st.t;
-    this.skyPoint(sp.azimuth, sp.elevation, pu.uSun.value);
-    this.skyPoint(mp.azimuth, mp.elevation, pu.uMoon.value);
+    pu.uTime.value = t;
     if (pu.uSun.value.z > 0.5) pu.uMoon.value.z = 0; // keep it simple: one disc at a time
     pu.uMoonPhase.value = moonPhase(ms);
     pu.uSkyCloud.value = env.clouds || overcast > 0.3 ? 1 + overcast : 0;
@@ -852,12 +896,85 @@ export class PixelRenderer {
       (cb[1] + (1 - cb[1]) * 0.65) * (1 - night * 0.55) * wet,
       (cb[2] + (1 - cb[2]) * 0.65) * (1 - night * 0.45) * wet,
     );
-    const dir = this.camera.getWorldDirection(this.tmp2);
-    const hfov = 2 * Math.atan(Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect);
-    pu.uYawPx.value = (Math.atan2(dir.x, -dir.z) / hfov) * this.W;
+    pu.uYawPx.value = yawPx;
     this.gl.setRenderTarget(null);
     this.gl.clear();
     this.gl.render(this.post.scene, this.post.cam);
+  }
+
+  /**
+   * The side-scroller view (side.ts): the level is drawn on a 2D canvas and goes through the same
+   * post pass (sky, sun / moon, clouds) and overlay (HUD, walker, checkpoints, pop-ups) as 3D / 2D.
+   */
+  private renderSide(st: TimelineState) {
+    const data = this.data!;
+    const { track, env } = data;
+    const gate = st.phase === 'gateStart' || st.phase === 'gateFinish';
+    const ms = this.snap?.ms ?? st.clockMs;
+    const weather = gate || this.snap ? NO_WEATHER : weatherAt(data.weather.series, data.weather.mode, ms);
+    const overcast = clamp(weather.cloud * 0.75 + weather.rain * 0.5, 0, 1);
+    const sky = withWeather(skyAt(ms, track.lat0, track.lon0), overcast);
+    const night = sky.lamp > 0.5;
+    const f = this.side.frame({
+      st,
+      night,
+      beam: night && env.life,
+      mist: env.clouds && !gate && !this.snap ? Math.max(this.mistAt(ms), overcast * 0.45 + weather.rain * 0.35) : 0,
+      env: { water: env.water, landmarks: env.landmarks },
+      wild: env.wildlife ? this.wild : [],
+      sprites: this.water?.scene.sprites ?? null,
+      crossings: this.water?.scene.crossings ?? [],
+      snap: !!this.snap,
+    });
+    this.sideTex.needsUpdate = true;
+    this.sidePoints = f.cpScreen;
+    this.facingLeft = false;
+    this.view = 'side';
+
+    const effort = effortAt(track, st.d, st.t, env.effort && st.phase === 'move');
+    const heroT = effort.slow ? st.t * 0.72 : st.t;
+    const walking = st.phase === 'move' || st.phase === 'pause';
+    const wild = env.wildlife && walking
+      ? { ground: f.wild, air: airSprites(this.wildAir, st.t, this.W, this.H, { ...f.hero, y: f.hero.y - headLift(data.hero) }) }
+      : null;
+    if (this.snap) this.overlayCtx.clearRect(0, 0, this.W, this.H);
+    else this.drawHudLayer(st, sky, ms, weather, {
+      heroAt: f.hero,
+      facingLeft: false,
+      petAt: data.pet ? f.pet : null,
+      petFacingLeft: false,
+      cpScreen: f.cpScreen,
+      decor: f.decor,
+      map: f.map,
+      heroInScene: false,
+      heroOnTop: false,
+      heroView: 'side',
+      sited: null,
+      effort,
+      heroT,
+      wild,
+      skyH: f.horizon,
+      noProfile: true, // the level already is the elevation profile
+    });
+    this.overlayTex.needsUpdate = true;
+
+    // sun and moon: across the sky with the time of day, as high as they really are
+    const pu = this.post.mat.uniforms;
+    const dial = this.dialAt(ms);
+    const sp = sunPosition(ms, track.lat0, track.lon0), mp = moonPosition(ms, track.lat0, track.lon0);
+    const up = this.H - f.horizon; // horizon, in the shader's y-up pixels
+    const place = (el: number, frac: number, out: THREE.Vector3) => el < -0.03
+      ? out.set(0, 0, 0)
+      : out.set(Math.round(this.W * (0.1 + 0.8 * clamp(frac, 0, 1))), Math.round(Math.min(this.H - 16, up + (el / (Math.PI / 2)) * f.horizon * 1.6)), 1);
+    place(sp.elevation, dial.isDay ? dial.frac : 0.5, pu.uSun.value);
+    place(mp.elevation, dial.isDay ? 1 - dial.frac : dial.frac, pu.uMoon.value);
+
+    // the level's own picture stands in for the 3D render; it's already in palette colours (no dither)
+    pu.tScene.value = this.sideTex;
+    pu.uDither.value = 0;
+    this.postPass(sky, weather, overcast, st.t, ms, f.scroll * 0.25);
+    pu.tScene.value = this.rt.texture;
+    pu.uDither.value = 0.09;
   }
 
   /** Set while rendering a poster snapshot: the whole diorama, at this clock time, no HUD / walker. */
@@ -883,6 +1000,11 @@ export class PixelRenderer {
       const points = new Map<string, ScreenPoint>();
       for (const cp of this.data.checkpoints) {
         if (!cp.enabled) continue;
+        if (this.mode === 'side') {
+          const p = this.sidePoints.get(cp.id);
+          if (p) points.set(cp.id, p);
+          continue;
+        }
         const x = sampleAt(track, track.x, cp.d), z = sampleAt(track, track.z, cp.d);
         const y = terrain.worldY(x, z);
         const p = this.project(x, y, z);

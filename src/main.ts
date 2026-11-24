@@ -11,6 +11,7 @@ import { parseGpx, type ParsedTrack } from './gpx';
 import { LogoSet, prepareLogo, type LogoColors, type LogoSource } from './logo';
 import { clockText, KIND_COLOR } from './overlay';
 import { PixelRenderer, type Aspect, type ViewMode } from './renderer';
+
 import { forget, loadSaved, makeBackup, mergeCheckpoints, parseBackup, pin, save, trackKey } from './store';
 import { buildTerrain, resolveScenery, terrainExtent, type SceneryChoice, type Terrain } from './terrain';
 import type { BBox, Dem } from './dem';
@@ -29,6 +30,8 @@ import { startAttract } from './attract';
 import { drawText, textWidth } from './font';
 import { loadWeather, weatherSummary, type WeatherMode, type WeatherSeries } from './weather';
 import { buildZones, defaultZones, ZONE_LABEL, ZONE_STYLES, zoneSummary, type TrailZones, type ZoneSettings, type ZoneStyle } from './zones';
+
+const VIEW_LABEL: Record<ViewMode, string> = { '3d': '3D', '2d': '2D', side: 'Side' };
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -434,6 +437,7 @@ function rebuild() {
     gate: highlight ? null : gate,
     zones: state.zones,
     water: state.water,
+    surface: state.surface,
     weather: { series: state.weather, mode: ui.weather.value as WeatherMode },
     photos: highlight ? [] : shownPhotos().map((p) => ({ id: p.id, d: p.d, time: p.time, caption: p.caption, art: state.photoArt.get(p.id)! })),
     bubbles: highlight ? [] : state.bubbles,
@@ -703,7 +707,7 @@ function applySettings(s: Record<string, unknown>) {
   if (s.gender === 'male' || s.gender === 'female') { state.gender = s.gender; setSeg(ui.gender, s.gender); }
   if ('companion' in s) { state.companion = (s.companion as CharacterId | null) ?? null; ui.companion.value = state.companion ?? ''; }
   if (typeof s.duration === 'number') ui.duration.value = String(s.duration);
-  if (s.mode === '2d' || s.mode === '3d') { renderer.setMode(s.mode); setSeg(ui.mode, s.mode); }
+  if (s.mode === '2d' || s.mode === '3d' || s.mode === 'side') { renderer.setMode(s.mode); setSeg(ui.mode, s.mode); }
   if (s.aspect === 'landscape' || s.aspect === 'portrait') { renderer.setAspect(s.aspect); setSeg(ui.aspect, s.aspect); ui.screen.classList.toggle('tall', s.aspect === 'portrait'); fitCanvas(); }
   if (typeof s.minimap === 'boolean') { ui.minimap.checked = s.minimap; renderer.showMinimap = s.minimap; }
   if (typeof s.showDate === 'boolean') { ui.showDate.checked = s.showDate; renderer.showDate = s.showDate; }
@@ -1333,7 +1337,7 @@ function refreshChrome() {
   const fmt = renderer.aspect === 'portrait' ? '9:16' : '16:9';
   const len = state.cut === 'highlight' ? '15 s highlight' : `${ui.duration.value} s`;
   ui.actMeta.textContent = `${fmt} · ${len} · ${ui.quality.value === '4' ? '720p' : '1080p'}`;
-  ui.sum.video.textContent = `${renderer.mode === '2d' ? '2D' : '3D'} · ${fmt} · ${len}`;
+  ui.sum.video.textContent = `${VIEW_LABEL[renderer.mode]} · ${fmt} · ${len}`;
   ui.sum.story.textContent = `${ACTIVITY_LABEL[state.activity]}${gateOn() ? ' · arch' : ''}`;
   ui.sum.character.textContent = CHARACTER_LABEL[state.character] + (state.companion ? ` + ${state.companion}` : '');
   const stops = state.checkpoints.filter((c) => c.enabled).length;
